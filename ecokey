@@ -1,0 +1,113 @@
+*BASIC
+NEW
+AUTO
+REM>Ecokey
+:
+OSWORD=&FFF1
+OSBYTE=&FFF4
+tries%=10
+retrydelay%=50
+buflen%=20
+port%=100
+DIM cblock% 13,buffer% buflen%
+INPUT "Remote station: " S%
+REPEAT
+INPUT "S(end) or R(eceive) " D$
+UNTIL D$="S" OR D$="R"
+IF D$="S" THEN PROCsend
+IF D$="R" THEN PROCreceive
+STOP
+:
+DEFPROCsend
+LOCAL key%,tx_result%
+PRINT "Type keys to send..."
+REPEAT
+key%=GET
+VDU key%
+?buffer%=key%
+tx_result%=FNtx(S%,port%,buffer%,1)
+UNTIL tx_result%<>0:REM Loop until a transmit failure
+ON tx_result%-&3F GOTO 280,290,300,310,320
+PRINT "Line jammed":END
+PRINT "Net error":END
+PRINT "Not listening":END
+PRINT "No clock":END
+PRINT "Bad TRANSMIT control block":END
+ENDPROC
+:
+DEFPROCreceive
+LOCAL bytes%
+PRINT "Waiting for data..."
+REPEAT
+bytes%=FNrx(S%,port%,buffer%,buflen%)
+IF bytes%=1 THEN PRINT "<";cblock%?4;".";cblock%?3;">";CHR$(?buffer%);
+UNTIL FALSE
+ENDPROC
+:
+DEFFNtx(station%,port%,buffer%,len%)
+REM transmit packet
+LOCAL A%,X%,Y%,tries%,delay%,result%,nonfatal%
+:
+REM cblock%?0 is below
+cblock%?1=port%
+cblock%!2=station%
+cblock%!4=buffer%
+cblock%!8=buffer%+len%
+:
+triesremain%=tries%
+REPEAT
+:
+REM start transmission
+A%=&10:REM transmit
+X%=cblock%
+Y%=cblock% DIV 256
+REM loop until started
+REPEAT
+?cblock%=&80
+CALL OSWORD
+UNTIL ?cblock%<>0
+:
+REM poll for completion
+REPEAT
+A%=&32:REM poll transmit
+result%=(USR(OSBYTE) AND &FF00) DIV 256
+UNTIL (result% AND &80)=0
+:
+nonfatal%=(result%=&41 OR result%=&42)
+IF nonfatal% THEN PROCdelay(retrydelay%):triesremain%=triesremain%-1
+:
+UNTIL triesremain%=0 OR NOT nonfatal%
+=result%
+:
+DEFFNrx(station%,port%,buffer%,maxlen%)
+REM receive packet return #bytes
+LOCAL A%,X%,Y%
+?cblock%=0:REM for cblock num
+cblock%?1=&7F
+cblock%?2=port%
+cblock%!3=station%
+cblock%!5=buffer%
+cblock%!9=buffer%+maxlen%
+A%=&11:REM receive
+X%=cblock%
+Y%=cblock% DIV 256
+CALL OSWORD
+:
+REM poll for reception
+A%=&33:REM poll receive
+X%=?cblock%
+REPEAT UNTIL (USR(OSBYTE) AND &8000)<>0
+:
+A%=&11:REM receive
+X%=cblock%
+Y%=cblock% DIV 256
+REM ?cblock% populated above
+CALL OSWORD
+=cblock%!9-cblock%!5
+:
+DEFPROCdelay(n%)
+REM delay n% cs
+LOCAL limit%
+limit%=TIME+n%
+REPEAT UNTIL TIME>limit%
+ENDPROC
