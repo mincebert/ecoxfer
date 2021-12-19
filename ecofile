@@ -1,18 +1,26 @@
 *BASIC
 NEW
 AUTO
-REM>Ecofile1
+REM>Ecofile
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
 OSFILE=&FFDD
 OSGBPB=&FFD1
 OSFIND=&FFCE
+OSASCI=&FFE3
 :
 OP_TXS_INFO=&01
 OP_TXR_NEXT=&81
 OP_TXS_BLK=&02
 OP_TXR_DONE=&82
+:
+DIM code% 600
+scratch=&70
+polltimeout=500
+txtimeout%=500
+rxtimeout%=500
+PROCassemble
 :
 polldelay%=10
 polltimeout%=500
@@ -22,12 +30,15 @@ port%=100
 DIM cblock% 13,buffer% buflen%
 :
 REPEAT
+INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
+UNTIL INSTR("TRP",dir$)<>0
+:
+IF dir$="P" THEN PROCpkttest
+:
+REPEAT
 INPUT "Remote station (0=any)? " station%
 UNTIL station%>=0 AND station%<=254
 :
-REPEAT
-INPUT "T(ransmit) or R(eceive) " dir$
-UNTIL dir$="T" OR dir$="R"
 IF dir$="T" THEN PROCtransmit
 IF dir$="R" THEN PROCreceive
 PRINT "End program"
@@ -157,18 +168,305 @@ CALL OSFILE
 :
 ENDPROC
 :
-DEFFNtx(station%,port%,buffer%,len%)
-REM transmit packet
-LOCAL A%,X%,Y%,delay%,result%,nonfatal%
+DEFPROCassemble
+FOR pass%=0 TO 1
+P%=code%
+[ OPT pass%*2
+\ --- TX ---
 :
-REM cblock%?0 is below
+.tx
+\ Entry - YX=cblock
+\ Exit  - A=0-success else err#
+:
+\ preserve scratch on stack
+LDA scratch
+PHA
+LDA scratch+1
+PHA
+\ XY address in scratch
+STX scratch
+STY scratch+1
+:
+\ calculate timeout
+LDA #txtimeout% AND &FF
+STA timeout
+LDA #(txtimeout% AND &FF00) DIV &100
+STA timeout+1
+\ timeout < 655.35s so +2/3/4=0
+LDA #0
+STA timeout+2
+STA timeout+3
+STA timeout+4
+JSR set_timeout
+:
+.tx_start
+LDA #&80 \ LSb=not started
+LDY #0
+STA (scratch),Y
+LDA #&10 \ =transmit
+LDX scratch
+LDY scratch+1
+JSR OSWORD
+LDY #0
+LDA (scratch),Y
+BEQ tx_start
+:
+.tx_poll
+\ poll for completion
+LDA #&32 \ =poll transmit
+JSR OSBYTE
+TXA
+BMI tx_poll
+CPX #&41 \ network error
+BEQ tx_retry_check
+CPX #&42 \ not listening
+BEQ tx_retry_check
+\ either success or fatal error
+JMP scratch_restore \ JMP>RTS
+:
+.tx_retry_check
+PHA
+JSR chk_timeout
+PLA
+BCC tx_start \ retry TX
+\ timed out
+TAX \ reply in X
+JMP scratch_restore \ JMP>RTS
+:
+\ --- RX ---
+:
+.rx
+\ Entry - YX=cblock
+\ Exit  - X=MSb-success
+:
+\ preserve scratch on stack
+LDA scratch
+PHA
+LDA scratch+1
+PHA
+\ XY address in scratch
+STX scratch
+STY scratch+1
+:
+LDA #0
+LDY #0
+STA (scratch),Y \ for cblk num
+LDA #&7F \ for control byte
+INY
+STA (scratch),Y
+LDA #&11 \ =receive
+\ X=scratch, above
+LDY scratch+1
+JSR OSWORD
+:
+\ calculate timeout
+LDA #rxtimeout% AND &FF
+STA timeout
+LDA #(rxtimeout% AND &FF00) DIV &100
+STA timeout+1
+\ timeout < 655.35s so +2/3/4=0
+LDA #0
+STA timeout+2
+STA timeout+3
+STA timeout+4
+JSR set_timeout
+:
+.rx_poll
+\ poll for reception
+LDY #0
+LDA (scratch),Y
+TAX
+LDA #&33 \ =poll receive
+JSR OSBYTE
+TXA
+BMI rx_read
+:
+\ no data received
+JSR chk_timeout
+BCC rx_poll \ retry poll
+\ timed out
+LDY #0
+LDA (scratch),Y
+TAX
+LDA #&34 \ =delete RX block
+JSR OSBYTE
+LDX #0 \ !MSb => not received
+JMP scratch_restore
+:
+.rx_read
+\ received message
+LDA #&11 \ =read RX block
+LDX scratch
+LDY scratch+1
+JSR OSWORD
+LDX #&80 \ MSb => received
+:
+.scratch_restore
+PLA
+STA scratch+1
+PLA
+STA scratch
+RTS
+:
+.get_time
+\ Get interval timer into
+\ buffer.
+\ Exit  - AXY undefined
+LDA #3 \ read interval timer
+LDX #now MOD 256
+LDY #now DIV 256
+JMP OSWORD
+\ RTS back to caller
+:
+.set_timeout
+\ Entry - length of time in
+\         timeout buffer
+\ Exit  _ time buffer updated to
+\         current time; timeout
+\         buffer added to
+\         current time
+\         AXY undefined
+JSR get_time
+CLC
+LDA now
+ADC timeout
+STA timeout
+LDA now+1
+ADC timeout+1
+STA timeout+1
+LDA now+2
+ADC timeout+2
+STA timeout+2
+LDA now+3
+ADC timeout+3
+STA timeout+3
+LDA now+4
+ADC timeout+4
+STA timeout+4
+RTS
+:
+.chk_timeout
+\ get interval timer into buffer
+\ and compare with timeout
+\ Exit - C=timeout reached
+\        AXY undefined
+JSR get_time
+LDA now+4
+CMP timeout+4
+BNE timeout_checked
+LDA now+3
+CMP timeout+3
+BNE timeout_checked
+LDA now+2
+CMP timeout+2
+BNE timeout_checked
+LDA now+1
+CMP timeout+1
+BNE timeout_checked
+LDA now
+CMP timeout
+.timeout_checked
+RTS
+:
+.now
+\ get_time fetches timer to here
+EQUB 0
+EQUB 0
+EQUB 0
+EQUB 0
+EQUB 0
+.timeout
+\ expiry of timeout
+EQUB 0
+EQUB 0
+EQUB 0
+EQUB 0
+EQUB 0
+:
+.wrhex
+PHA
+LSR A
+LSR A
+LSR A
+LSR A
+JSR wrnibble
+PLA
+AND #&0F
+JMP wrnibble \ JMP>RTS
+:
+.wrnibble
+SED
+CMP #10
+ADC #&30
+CLD
+JMP OSASCI \ JMP>RTS
+:
+.wrreg
+PHA
+LDA #ASC"("
+JSR OSASCI
+:
+LDA #ASC"A"
+JSR OSASCI
+PLA
+PHA
+JSR wrhex
+:
+LDA #ASC"X"
+JSR OSASCI
+TXA
+JSR wrhex
+:
+LDA #ASC"Y"
+JSR OSASCI
+TYA
+JSR wrhex
+:
+LDA #ASC")"
+JSR OSASCI
+PLA
+RTS
+]
+NEXT
+PRINT "Code assembled at &";~code%;"+";~P%-code%
+ENDPROC
+:
+DEFFNtx_mc(station%,port%,buffer%,len%)
+LOCAL X%,Y%
 cblock%?1=port%
 cblock%!2=station%
 cblock%!4=buffer%
 cblock%!8=buffer%+len%
+X%=cblock%
+Y%=cblock% DIV &100
+=(USR(tx) AND &FF00) DIV &100
 :
+DEFFNrx_mc(station%,port%,buffer%,maxlen%)
+REM receive packet return #bytes
+:
+LOCAL X%,Y%,U%
+cblock%?2=port%
+cblock%!3=station%
+cblock%!5=buffer%
+cblock%!9=buffer%+maxlen%
+X%=cblock%
+Y%=cblock% DIV &100
+IF (USR(rx) AND &8000)=0 THEN =-1
+=cblock%!9-cblock%!5
+:
+DEFFNtx_bas(station%,port%,buffer%,len%)
+REM transmit packet
+LOCAL A%,X%,Y%,delay%,result%,nonfatal%
+:
+timeout%=TIME+polltimeout%
+REM loop until timeout or fatal
 REPEAT
 :
+REM set up control block
+cblock%?1=port%
+cblock%!2=station%
+cblock%!4=buffer%
+cblock%!8=buffer%+len%
 REM start transmission
 A%=&10:REM transmit
 X%=cblock%
@@ -180,27 +478,28 @@ CALL OSWORD
 UNTIL ?cblock%<>0
 :
 REM poll for completion
-timeout%=TIME+polltimeout%
 REPEAT
 A%=&32:REM poll transmit
-result%=(USR(OSBYTE) AND &FF00) DIV 256
+result%=(USR(OSBYTE) AND &FF00) DIV &100
 UNTIL (result% AND &80)=0
 :
 nonfatal%=(result%=&41 OR result%=&42)
-REM IF nonfatal% THEN PROCdelay(polldelay%)
 UNTIL (NOT nonfatal%) OR TIME>=timeout%
 =result%
 :
-DEFFNrx(station%,port%,buffer%,maxlen%)
+DEFFNrx_bas(station%,port%,buffer%,maxlen%)
 REM receive packet return #bytes
 :
 LOCAL A%,X%,Y%
+:
+REM set up control block
 ?cblock%=0:REM for cblock num
 cblock%?1=&7F
 cblock%?2=port%
 cblock%!3=station%
 cblock%!5=buffer%
 cblock%!9=buffer%+maxlen%
+REM listen
 A%=&11:REM receive
 X%=cblock%
 Y%=cblock% DIV 256
@@ -208,11 +507,10 @@ CALL OSWORD
 :
 REM poll for reception
 A%=&33:REM poll receive
-X%=?cblock%
+X%=?cblock%:PRINT "P";~X%;
 timeout%=TIME+polltimeout%
 REPEAT
 result%=(USR(OSBYTE) AND &8000)
-REM IF result%=0 THEN PROCdelay(polldelay%)
 UNTIL result%<>0 OR TIME>=timeout%
 IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock%:CALL OSBYTE:=-1
 :
@@ -245,4 +543,46 @@ IF err%=&41 THEN ="Net error"
 IF err%=&42 THEN ="Not listening"
 IF err%=&43 THEN ="No clock"
 IF err%=&44 THEN ="Bad control block"
-=""
+="ERR#"+STR$~err%
+:
+DEFPROCpkttest
+LOCAL station%,key$
+PRINT "PACKET TEST"
+REPEAT
+INPUT "Remote station? "station%
+UNTIL station%>1 AND station%<255
+:
+REPEAT
+PRINT "T(ransmit) or R(eceive): ";
+REPEAT
+key$=GET$
+valid%=INSTR("TR",key$)<>0
+IF NOT valid% THEN VDU 7
+UNTIL valid%
+PRINT key$
+IF key$="T" THEN PROCtxtest(station%)
+IF key$="R" THEN PROCrxtest(station%)
+UNTIL FALSE
+ENDPROC
+:
+DEFFNtx(station%,port%,buffer%,len%)
+REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~len%
+=FNtx_mc(station%,port%,buffer%,len%)
+:
+DEFFNrx(station%,port%,buffer%,maxlen%)
+REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~maxlen%
+=FNrx_mc(station%,port%,buffer%,maxlen%)
+:
+DEFPROCtxtest(station%)
+LOCAL result%
+$buffer%="to:"+STR$(station%)
+result%=FNtx(station%,port%+1,buffer%,LEN($buffer%)+1)
+PRINT "Result=&";~result%
+ENDPROC
+:
+DEFPROCrxtest(station%)
+LOCAL bytes%
+bytes%=FNrx(station%,port%+1,buffer%,buflen%)
+PRINT "Bytes=";bytes%
+IF bytes%<>-1 THEN PRINT "Received:<";$buffer%;">"
+ENDPROC
