@@ -1,7 +1,7 @@
 *BASIC
 NEW
 AUTO
-REM>Ecofile
+REM>Ecofile1
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -46,13 +46,11 @@ Y%=buffer% DIV 256
 result%=USR(OSFILE) AND &FF
 IF result%<>1 THEN PRINT "File error":STOP
 len%=buffer%!10
-PRINT "Load=&";~buffer%!2;" Exec=&";~buffer%!6;" Len=&";~len%
+PRINT filename$;" ";~buffer%!2;" ";~buffer%!6;" ";~len%
 :
-PRINT "Sending TX info block..."
 buffer%?1=OP_TXS_INFO
 result%=FNtx(station%,port%,buffer%+1,17+LEN(filename$)+1)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
-PRINT "Done"
 :
 A%=64:REM open for input
 X%=(buffer%+18) MOD 256
@@ -63,16 +61,14 @@ IF fh%=0 THEN PRINT "Error opening file":STOP
 xfrbytes%=0
 REPEAT
 REPEAT
-PRINT "Waiting for TX next..."
 bytes%=FNrx(station%,port%,buffer%,9)
 IF bytes%<>9 THEN PRINT "Illegal next block":STOP
 IF ?buffer%<>OP_TXR_NEXT THEN PRINT "Unexpected operation ";~?buffer%
 UNTIL ?buffer%=OP_TXR_NEXT
-PRINT "Received request for block &";~buffer%!1;" <=&";~buffer%!5
+PRINT ;~buffer%!1;" ";
 IF buffer%!1<>xfrbytes% THEN PRINT "Error - we're expecting &";~xfrbytes%:STOP
 :
 filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
-PRINT "Read &";~filebytes%;" bytes from file"
 ?buffer%=fh%
 buffer%!1=buffer%+13
 filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
@@ -84,13 +80,12 @@ IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error reading file":STOP
 :
 buffer%?8=OP_TXS_BLK
 buffer%!9=xfrbytes%
-PRINT "Sending block &";~xfrbytes%;"+";~filebytes%
 result%=FNtx(station%,port%,buffer%+8,filebytes%+5)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 xfrbytes%=xfrbytes%+filebytes%
 UNTIL xfrbytes%>=len%
+PRINT "=";~xfrbytes%
 :
-PRINT "Closing file"
 A%=0
 Y%=fh%
 CALL OSFIND
@@ -99,22 +94,20 @@ ENDPROC
 DEFPROCreceive
 LOCAL bytes%
 REPEAT
-PRINT "Waiting for TX start info block..."
+PRINT "Waiting for TX start..."
 bytes%=FNrx(station%,port%,buffer%,buflen%)
-IF bytes%>=0 PRINT "Received ";bytes%;" bytes" ELSE PRINT "Nothing received"
+IF bytes%<0 THEN PRINT "Nothing received"
 UNTIL bytes%>=0
 IF bytes%<19 THEN PRINT "Illegal info block":STOP
 IF ?buffer%<>OP_TXS_INFO THEN PRINT "Unexpected operation ";~?buffer%:STOP
 :
 station%=cblock%?3+256*cblock%?4
-PRINT "Received from station ";FNstation(station%)
 name$=$(buffer%+17)
 load%=buffer%!1
 exec%=buffer%!5
 len%=buffer%!9
-PRINT "Name=";name$;" Load=&";~load%;" Exec=&";~exec%;" Len=&";~len%
+PRINT FNstation(station%);": ";name$;" ";~load%;" ";~exec%;" ";~len%
 :
-PRINT "Opening file"
 A%=128:REM open for output
 X%=(buffer%+17) MOD 256
 Y%=(buffer%+17) DIV 256
@@ -123,21 +116,18 @@ IF fh%=0 THEN PRINT "Error opening file":STOP
 :
 xfrbytes%=0
 REPEAT
-PRINT "Requesting block at &";~xfrbytes%;" <=&";~maxxfr%
+PRINT ;~xfrbytes%;" ";
 ?buffer%=OP_TXR_NEXT
 buffer%!1=xfrbytes%
 buffer%!5=maxxfr%
 result%=FNtx(station%,port%,buffer%,9)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
-PRINT "Waiting for block"
 bytes%=FNrx(station%,port%,buffer%+8,maxxfr%+5)
 IF buffer%?8<>OP_TXS_BLK THEN PRINT "Invalid block type received":STOP
-PRINT "Received block &";~buffer%!9;"+";~bytes%-5
 IF buffer%!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
 IF bytes%-5>len%-xfrbytes% THEN PRINT "Oversize block":STOP
 :
-PRINT "Writing file"
 ?buffer%=fh%
 buffer%!1=buffer%+13
 buffer%!5=bytes%-5
@@ -148,13 +138,12 @@ IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error writing file":STOP
 :
 xfrbytes%=xfrbytes%+bytes%-5
 UNTIL xfrbytes%>=len%
+PRINT "=";~xfrbytes%
 :
-PRINT "Closing file"
 A%=0
 Y%=fh%
 CALL OSFIND
 :
-PRINT "Setting metadata"
 $(buffer%+18)=name$
 !buffer%=buffer%+18
 buffer%!2=load%
@@ -166,19 +155,19 @@ A%=3
 buffer%!6=exec%
 CALL OSFILE
 :
-PRINT "DONE"
 ENDPROC
 :
 DEFFNtx(station%,port%,buffer%,len%)
 REM transmit packet
 LOCAL A%,X%,Y%,delay%,result%,nonfatal%
-PRINT "]]] TX ";FNstation(station%);":";port%;" &";~buffer%;"+";~len%;" ";
 :
 REM cblock%?0 is below
 cblock%?1=port%
 cblock%!2=station%
 cblock%!4=buffer%
 cblock%!8=buffer%+len%
+:
+REPEAT
 :
 REM start transmission
 A%=&10:REM transmit
@@ -193,22 +182,18 @@ UNTIL ?cblock%<>0
 REM poll for completion
 timeout%=TIME+polltimeout%
 REPEAT
-REPEAT
 A%=&32:REM poll transmit
 result%=(USR(OSBYTE) AND &FF00) DIV 256
 UNTIL (result% AND &80)=0
 :
 nonfatal%=(result%=&41 OR result%=&42)
-IF nonfatal% THEN PROCdelay(polldelay%):PRINT ".";
-:
+REM IF nonfatal% THEN PROCdelay(polldelay%)
 UNTIL (NOT nonfatal%) OR TIME>=timeout%
-PRINT "=&";~result%
 =result%
 :
 DEFFNrx(station%,port%,buffer%,maxlen%)
 REM receive packet return #bytes
 :
-PRINT "[[[ RX ";FNstation(station%);":";port%;" &";~buffer%;"+";~maxlen%;" ";
 LOCAL A%,X%,Y%
 ?cblock%=0:REM for cblock num
 cblock%?1=&7F
@@ -227,7 +212,7 @@ X%=?cblock%
 timeout%=TIME+polltimeout%
 REPEAT
 result%=(USR(OSBYTE) AND &8000)
-IF result%=0 THEN PROCdelay(polldelay%):PRINT ".";
+REM IF result%=0 THEN PROCdelay(polldelay%)
 UNTIL result%<>0 OR TIME>=timeout%
 IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock%:CALL OSBYTE:=-1
 :
@@ -236,7 +221,6 @@ X%=cblock%
 Y%=cblock% DIV 256
 REM ?cblock% populated above
 CALL OSWORD
-PRINT "=&";~cblock%!9-cblock%!5
 =cblock%!9-cblock%!5
 :
 DEFPROCdelay(n%)
