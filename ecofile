@@ -13,7 +13,6 @@ OSASCI=&FFE3
 OP_TXS_INFO=&01
 OP_TXR_NEXT=&81
 OP_TXS_BLK=&02
-OP_TXR_DONE=&82
 :
 DIM code% 600
 scratch=&70
@@ -26,7 +25,8 @@ polldelay%=10
 polltimeout%=500
 buflen%=300
 maxxfr%=256
-port%=100
+srv_port%=100
+cli_port%=101
 DIM cblock% 13,buffer% buflen%
 :
 REPEAT
@@ -59,8 +59,9 @@ IF result%<>1 THEN PRINT "File error":STOP
 len%=buffer%!10
 PRINT filename$;" ";~buffer%!2;" ";~buffer%!6;" ";~len%
 :
-buffer%?1=OP_TXS_INFO
-result%=FNtx(station%,port%,buffer%+1,17+LEN(filename$)+1)
+?buffer%=OP_TXS_INFO
+buffer%?1=cli_port%
+result%=FNtx(station%,srv_port%,buffer%,18+LEN(filename$)+1)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
 A%=64:REM open for input
@@ -72,7 +73,7 @@ IF fh%=0 THEN PRINT "Error opening file":STOP
 xfrbytes%=0
 REPEAT
 REPEAT
-bytes%=FNrx(station%,port%,buffer%,9)
+bytes%=FNrx(station%,cli_port%,buffer%,9)
 IF bytes%<>9 THEN PRINT "Illegal next block":STOP
 IF ?buffer%<>OP_TXR_NEXT THEN PRINT "Unexpected operation ";~?buffer%
 UNTIL ?buffer%=OP_TXR_NEXT
@@ -91,7 +92,7 @@ IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error reading file":STOP
 :
 buffer%?8=OP_TXS_BLK
 buffer%!9=xfrbytes%
-result%=FNtx(station%,port%,buffer%+8,filebytes%+5)
+result%=FNtx(station%,srv_port%,buffer%+8,filebytes%+5)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 xfrbytes%=xfrbytes%+filebytes%
 UNTIL xfrbytes%>=len%
@@ -106,18 +107,19 @@ DEFPROCreceive
 LOCAL bytes%
 REPEAT
 PRINT "Waiting for TX start..."
-bytes%=FNrx(station%,port%,buffer%,buflen%)
+bytes%=FNrx(station%,srv_port%,buffer%,buflen%)
 IF bytes%<0 THEN PRINT "Nothing received"
 UNTIL bytes%>=0
-IF bytes%<19 THEN PRINT "Illegal info block":STOP
+IF bytes%<20 THEN PRINT "Illegal info block (too small)":STOP
 IF ?buffer%<>OP_TXS_INFO THEN PRINT "Unexpected operation ";~?buffer%:STOP
 :
-station%=cblock%?3+256*cblock%?4
-name$=$(buffer%+17)
-load%=buffer%!1
-exec%=buffer%!5
-len%=buffer%!9
-PRINT FNstation(station%);": ";name$;" ";~load%;" ";~exec%;" ";~len%
+station%=cblock%!3 AND &FFFF
+port%=buffer%?1
+name$=$(buffer%+18)
+load%=buffer%!2
+exec%=buffer%!6
+len%=buffer%!10
+PRINT FNstation(station%);":";port%;" ";name$;" ";~load%;" ";~exec%;" ";~len%
 :
 A%=128:REM open for output
 X%=(buffer%+17) MOD 256
@@ -134,7 +136,7 @@ buffer%!5=maxxfr%
 result%=FNtx(station%,port%,buffer%,9)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
-bytes%=FNrx(station%,port%,buffer%+8,maxxfr%+5)
+bytes%=FNrx(station%,srv_port%,buffer%+8,maxxfr%+5)
 IF buffer%?8<>OP_TXS_BLK THEN PRINT "Invalid block type received":STOP
 IF buffer%!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
 IF bytes%-5>len%-xfrbytes% THEN PRINT "Oversize block":STOP
@@ -155,14 +157,15 @@ A%=0
 Y%=fh%
 CALL OSFIND
 :
+REM write file metadata
 $(buffer%+18)=name$
 !buffer%=buffer%+18
 buffer%!2=load%
-A%=2
+A%=2:REM write load addr
 X%=buffer% MOD 256
 Y%=buffer% DIV 256
 CALL OSFILE
-A%=3
+A%=3:REM write exec addr
 buffer%!6=exec%
 CALL OSFILE
 :
