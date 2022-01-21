@@ -14,20 +14,35 @@ OP_TXS_INFO=&01
 OP_TXR_NEXT=&81
 OP_TXS_BLK=&02
 :
-DIM code% 600
+codebuf%=1600
+DIM code% codebuf%
 scratch=&70
+scratchsize=5
 polltimeout=500
 txtimeout%=500
 rxtimeout%=500
-PROCassemble
 :
 polldelay%=10
 polltimeout%=500
-buflen%=300
+buflen=300
 maxxfr%=256
 srv_port%=100
 cli_port%=101
-DIM cblock% 13,buffer% buflen%
+DIM cblock 13,buffer buflen
+:
+DIM F 100,S 20
+:
+PROCassemble
+:
+REM test send routine
+$F="T1"
+!S=11
+S!2=F
+X%=S
+Y%=S DIV 256
+PRINT "Sending..."
+PRINT ~USR(send)
+END
 :
 REPEAT
 INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
@@ -47,52 +62,52 @@ END
 DEFPROCtransmit
 LOCAL filenamelen%,result%
 INPUT "Filename? " filename$
-IF 18+LEN(filename$)+1>=buflen% THEN PRINT "Filename too long":STOP
+IF 18+LEN(filename$)+1>=buflen THEN PRINT "Filename too long":STOP
 :
-$(buffer%+18)=filename$
-!buffer%=buffer%+18
+$(buffer+18)=filename$
+!buffer=buffer+18
 A%=5
-X%=buffer% MOD 256
-Y%=buffer% DIV 256
+X%=buffer MOD 256
+Y%=buffer DIV 256
 result%=USR(OSFILE) AND &FF
 IF result%<>1 THEN PRINT "File error":STOP
-len%=buffer%!10
-PRINT filename$;" ";~buffer%!2;" ";~buffer%!6;" ";~len%
+len%=buffer!10
+PRINT filename$;" ";~buffer!2;" ";~buffer!6;" ";~len%
 :
-?buffer%=OP_TXS_INFO
-buffer%?1=cli_port%
-result%=FNtx(station%,srv_port%,buffer%,18+LEN(filename$)+1)
+?buffer=OP_TXS_INFO
+buffer?1=cli_port%
+result%=FNtx(station%,srv_port%,buffer,18+LEN(filename$)+1)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
 A%=64:REM open for input
-X%=(buffer%+18) MOD 256
-Y%=(buffer%+18) DIV 256
+X%=(buffer+18) MOD 256
+Y%=(buffer+18) DIV 256
 fh%=USR(OSFIND) AND &FF
 IF fh%=0 THEN PRINT "Error opening file":STOP
 :
 xfrbytes%=0
 REPEAT
 REPEAT
-bytes%=FNrx(station%,cli_port%,buffer%,9)
+bytes%=FNrx(station%,cli_port%,buffer,9)
 IF bytes%<>9 THEN PRINT "Illegal next block":STOP
-IF ?buffer%<>OP_TXR_NEXT THEN PRINT "Unexpected operation ";~?buffer%
-UNTIL ?buffer%=OP_TXR_NEXT
-PRINT ;~buffer%!1;" ";
-IF buffer%!1<>xfrbytes% THEN PRINT "Error - we're expecting &";~xfrbytes%:STOP
+IF ?buffer<>OP_TXR_NEXT THEN PRINT "Unexpected operation ";~?buffer
+UNTIL ?buffer=OP_TXR_NEXT
+PRINT ;~buffer!1;" ";
+IF buffer!1<>xfrbytes% THEN PRINT "Error - we're expecting &";~xfrbytes%:STOP
 :
 filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
-?buffer%=fh%
-buffer%!1=buffer%+13
+?buffer=fh%
+buffer!1=buffer+13
 filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
-buffer%!5=filebytes%
+buffer!5=filebytes%
 A%=4:REM read at curr pos
-X%=buffer% MOD 256
-Y%=buffer% DIV 256
+X%=buffer MOD 256
+Y%=buffer DIV 256
 IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error reading file":STOP
 :
-buffer%?8=OP_TXS_BLK
-buffer%!9=xfrbytes%
-result%=FNtx(station%,srv_port%,buffer%+8,filebytes%+5)
+buffer?8=OP_TXS_BLK
+buffer!9=xfrbytes%
+result%=FNtx(station%,srv_port%,buffer+8,filebytes%+5)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 xfrbytes%=xfrbytes%+filebytes%
 UNTIL xfrbytes%>=len%
@@ -107,46 +122,46 @@ DEFPROCreceive
 LOCAL bytes%
 REPEAT
 PRINT "Waiting for TX start..."
-bytes%=FNrx(station%,srv_port%,buffer%,buflen%)
+bytes%=FNrx(station%,srv_port%,buffer,buflen)
 IF bytes%<0 THEN PRINT "Nothing received"
 UNTIL bytes%>=0
 IF bytes%<20 THEN PRINT "Illegal info block (too small)":STOP
-IF ?buffer%<>OP_TXS_INFO THEN PRINT "Unexpected operation ";~?buffer%:STOP
+IF ?buffer<>OP_TXS_INFO THEN PRINT "Unexpected operation ";~?buffer:STOP
 :
-station%=cblock%!3 AND &FFFF
-port%=buffer%?1
-name$=$(buffer%+18)
-load%=buffer%!2
-exec%=buffer%!6
-len%=buffer%!10
+station%=cblock!3 AND &FFFF
+port%=buffer?1
+name$=$(buffer+18)
+load%=buffer!2
+exec%=buffer!6
+len%=buffer!10
 PRINT FNstation(station%);":";port%;" ";name$;" ";~load%;" ";~exec%;" ";~len%
 :
 A%=128:REM open for output
-X%=(buffer%+17) MOD 256
-Y%=(buffer%+17) DIV 256
+X%=(buffer+17) MOD 256
+Y%=(buffer+17) DIV 256
 fh%=USR(OSFIND) AND &FF
 IF fh%=0 THEN PRINT "Error opening file":STOP
 :
 xfrbytes%=0
 REPEAT
 PRINT ;~xfrbytes%;" ";
-?buffer%=OP_TXR_NEXT
-buffer%!1=xfrbytes%
-buffer%!5=maxxfr%
-result%=FNtx(station%,port%,buffer%,9)
+?buffer=OP_TXR_NEXT
+buffer!1=xfrbytes%
+buffer!5=maxxfr%
+result%=FNtx(station%,port%,buffer,9)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
-bytes%=FNrx(station%,srv_port%,buffer%+8,maxxfr%+5)
-IF buffer%?8<>OP_TXS_BLK THEN PRINT "Invalid block type received":STOP
-IF buffer%!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
+bytes%=FNrx(station%,srv_port%,buffer+8,maxxfr%+5)
+IF buffer?8<>OP_TXS_BLK THEN PRINT "Invalid block type received":STOP
+IF buffer!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
 IF bytes%-5>len%-xfrbytes% THEN PRINT "Oversize block":STOP
 :
-?buffer%=fh%
-buffer%!1=buffer%+13
-buffer%!5=bytes%-5
+?buffer=fh%
+buffer!1=buffer+13
+buffer!5=bytes%-5
 A%=2:REM append
-X%=buffer% MOD 256
-Y%=buffer% DIV 256
+X%=buffer MOD 256
+Y%=buffer DIV 256
 IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error writing file":STOP
 :
 xfrbytes%=xfrbytes%+bytes%-5
@@ -158,15 +173,15 @@ Y%=fh%
 CALL OSFIND
 :
 REM write file metadata
-$(buffer%+18)=name$
-!buffer%=buffer%+18
-buffer%!2=load%
+$(buffer+18)=name$
+!buffer=buffer+18
+buffer!2=load%
 A%=2:REM write load addr
-X%=buffer% MOD 256
-Y%=buffer% DIV 256
+X%=buffer MOD 256
+Y%=buffer DIV 256
 CALL OSFILE
 A%=3:REM write exec addr
-buffer%!6=exec%
+buffer!6=exec%
 CALL OSFILE
 :
 ENDPROC
@@ -175,11 +190,266 @@ DEFPROCassemble
 FOR pass%=0 TO 1
 P%=code%
 [ OPT pass%*2
+\ --- SEND ---
+:
+.send
+\ Entry - YX=sendblock
+\ Exit  - ?
+\ sendblock - +0=dest stn
+\             +2=filename addr
+:
+\ preserve scratch on stack
+LDA scratch
+PHA
+LDA scratch+1
+PHA
+\ XY address in scratch
+STX scratch
+STY scratch+1
+\ preserve rest of scratch
+LDY #scratchsize-2
+.scratchsaveloop
+LDA scratch+1,Y
+PHA
+DEY
+BEQ scratchsaveloop
+:
+\ copy filename addr to OSFILE
+\ param block
+LDY #2
+LDA (scratch),Y
+STA buffer
+INY
+LDA (scratch),Y
+STA buffer+1
+:
+LDA #ASC"I":JSR OSASCI \ DEBUG=file info
+LDA #5 \ read cat info for file
+LDX #buffer MOD &100
+LDY #buffer DIV &100
+JSR OSFILE
+CMP #1 \ =file found
+BEQ filefound
+\ not found
+BRK
+EQUB 0
+EQUS "File not found"
+EQUB 0
+:
+.filefound
+\ populate buffer to send;
+\ we can use the OSFILE param
+\ block but just change the
+\ first two bytes and put the
+\ filename on the end
+LDA #OP_TXS_INFO
+STA buffer
+LDA #cli_port%
+STA buffer+1
+LDY #2
+LDA (scratch),Y
+STA scratch+2
+INY
+LDA (scratch),Y
+STA scratch+3
+\ TODO- should trim to leaf name
+LDY #0
+.filenamecopyloop
+LDA (scratch+2),Y
+STA buffer+18,Y
+INY
+CMP #13
+BNE filenamecopyloop
+TYA
+\ add 18 bytes for rest of
+\ cblock (on top of filename)
+CLC
+ADC #18
+STA cblock+8
+:
+\ set up tx cblock
+LDA #srv_port%
+STA cblock+1
+\ copy dest stn
+LDY #0
+LDA (scratch),Y
+STA cblock+2
+INY
+LDA (scratch),Y
+STA cblock+3
+\ set start addr
+LDA #buffer MOD &100
+STA cblock+4
+LDA #buffer DIV &100
+STA cblock+5
+LDA #0
+STA cblock+6
+STA cblock+7
+\ set end addr
+LDA #(buffer+2) MOD &100
+ADC cblock+8 \ filename len
+STA cblock+8
+LDA #(buffer+2) DIV &100
+ADC #0
+STA cblock+9
+\ never >64K so no need to do
+\ carry
+LDA #0
+STA cblock+10
+STA cblock+11
+LDX #cblock MOD &100
+LDY #cblock DIV &100
+LDA #ASC"H":JSR OSASCI \ DEBUG=tx hdr
+JSR tx
+CPX #0
+BEQ txhdrok
+JMP neterror
+:
+.txhdrok
+\ tx header sent - open file
+LDA #ASC"F":JSR OSASCI \ DEBUG=open file
+LDA #&40 \ =openin
+LDX scratch+2
+LDY scratch+3
+JSR OSFIND
+STA fhandle
+TAX
+BEQ openinerror
+:
+\ initialise 'bytes so far'
+LDA #0
+STA xfrbytes
+STA xfrbytes+1
+STA xfrbytes+2
+STA xfrbytes+3
+:
+\ set up rx cblock
+LDA #cli_port%
+STA cblock+2
+\ copy dest stn
+LDY #0
+LDA (scratch),Y
+STA cblock+3
+INY
+LDA (scratch),Y
+STA cblock+4
+\ set start addr
+LDA #buffer MOD &100
+STA cblock+5
+LDA #buffer DIV &100
+STA cblock+6
+\ set end addr
+LDA #(buffer+9) MOD &100
+STA cblock+9
+LDA #(buffer+9) DIV &100
+STA cblock+10
+\ blank top of 32-bit addr
+LDA #0
+STA cblock+7
+STA cblock+8
+STA cblock+11
+STA cblock+12
+LDX #cblock MOD &100
+LDY #cblock DIV &100
+LDA #ASC"B":JSR OSASCI \ DEBUG=rx block req
+JSR rx
+TXA
+BPL noblkreqerror
+:
+LDA #0
+LDY fhandle
+JSR OSFIND
+:
+LDY #0
+.okloop
+LDA okmsg,Y
+INY
+JSR OSASCI
+CMP #13
+BNE okloop
+JMP scratch_restoren \ JMP>RTS
+.okmsg
+EQUS "OK so far!"
+EQUB 13
+:
+.openinerror
+BRK
+EQUB 0
+EQUS "File error"
+EQUB 0
+:
+.noblkreqerror
+LDA #0
+LDY fhandle
+JSR OSFIND
+BRK
+EQUB 0
+EQUS "Block request error"
+EQUB 0
+:
+.neterror
+\ calculate offset of this error
+\ in the message addr table
+TXA
+SEC
+SBC #&40
+ASL A
+TAX
+LDA neterrormsgtbl,X
+STA scratch
+LDA neterrormsgtbl+1,X
+STA scratch+1
+:
+LDY #0
+.neterrorloop
+LDA (scratch),Y
+INY
+JSR OSASCI
+CMP #13
+BNE neterrorloop
+JMP scratch_restoren \ JMP>RTS
+:
+.neterrormsgtbl
+EQUW linejammsg
+EQUW handshkmsg
+EQUW noscoutmsg
+EQUW noclockmsg
+EQUW badtxblock
+.linejammsg
+EQUS "Line jammed"
+EQUB 13
+.handshkmsg
+EQUS "Net error"
+EQUB 13
+.noscoutmsg
+EQUS "Not listening"
+EQUB 13
+.noclockmsg
+EQUS "No clock"
+EQUB 13
+.badtxblock
+EQUS "Bad control block"
+EQUB 13
+:
+.neterrormsg
+EQUS "Network error "
+EQUB 13
+:
+.scratch_restoren
+LDY #0
+.scratchrestorenloop
+PLA
+STA scratch,Y
+INY
+CPY #scratchsize
+BNE scratchrestorenloop
+RTS
+:
 \ --- TX ---
 :
 .tx
 \ Entry - YX=cblock
-\ Exit  - A=0-success else err#
+\ Exit  - X=0-success else err#
 :
 \ preserve scratch on stack
 LDA scratch
@@ -240,6 +510,7 @@ JMP scratch_restore \ JMP>RTS
 :
 .rx
 \ Entry - YX=cblock
+\  +0/1 will be initialised
 \ Exit  - X=MSb-success
 :
 \ preserve scratch on stack
@@ -371,6 +642,12 @@ CMP timeout
 .timeout_checked
 RTS
 :
+.fhandle
+EQUB 0
+:
+.xfrbytes
+EQUD 0
+:
 .now
 \ get_time fetches timer to here
 EQUB 0
@@ -430,34 +707,35 @@ JSR OSASCI
 PLA
 RTS
 ]
+IF P%-code%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
 NEXT
 PRINT "Code assembled at &";~code%;"+";~P%-code%
 ENDPROC
 :
-DEFFNtx_mc(station%,port%,buffer%,len%)
+DEFFNtx_mc(station%,port%,buffer,len%)
 LOCAL X%,Y%
-cblock%?1=port%
-cblock%!2=station%
-cblock%!4=buffer%
-cblock%!8=buffer%+len%
-X%=cblock%
-Y%=cblock% DIV &100
+cblock?1=port%
+cblock!2=station%
+cblock!4=buffer
+cblock!8=buffer+len%
+X%=cblock
+Y%=cblock DIV &100
 =(USR(tx) AND &FF00) DIV &100
 :
-DEFFNrx_mc(station%,port%,buffer%,maxlen%)
+DEFFNrx_mc(station%,port%,buffer,maxlen%)
 REM receive packet return #bytes
 :
 LOCAL X%,Y%,U%
-cblock%?2=port%
-cblock%!3=station%
-cblock%!5=buffer%
-cblock%!9=buffer%+maxlen%
-X%=cblock%
-Y%=cblock% DIV &100
+cblock?2=port%
+cblock!3=station%
+cblock!5=buffer
+cblock!9=buffer+maxlen%
+X%=cblock
+Y%=cblock DIV &100
 IF (USR(rx) AND &8000)=0 THEN =-1
-=cblock%!9-cblock%!5
+=cblock!9-cblock!5
 :
-DEFFNtx_bas(station%,port%,buffer%,len%)
+DEFFNtx_bas(station%,port%,buffer,len%)
 REM transmit packet
 LOCAL A%,X%,Y%,delay%,result%,nonfatal%
 :
@@ -466,19 +744,19 @@ REM loop until timeout or fatal
 REPEAT
 :
 REM set up control block
-cblock%?1=port%
-cblock%!2=station%
-cblock%!4=buffer%
-cblock%!8=buffer%+len%
+cblock?1=port%
+cblock!2=station%
+cblock!4=buffer
+cblock!8=buffer+len%
 REM start transmission
 A%=&10:REM transmit
-X%=cblock%
-Y%=cblock% DIV 256
+X%=cblock
+Y%=cblock DIV 256
 REM loop until started
 REPEAT
-?cblock%=&80
+?cblock=&80
 CALL OSWORD
-UNTIL ?cblock%<>0
+UNTIL ?cblock<>0
 :
 REM poll for completion
 REPEAT
@@ -490,39 +768,39 @@ nonfatal%=(result%=&41 OR result%=&42)
 UNTIL (NOT nonfatal%) OR TIME>=timeout%
 =result%
 :
-DEFFNrx_bas(station%,port%,buffer%,maxlen%)
+DEFFNrx_bas(station%,port%,buffer,maxlen%)
 REM receive packet return #bytes
 :
 LOCAL A%,X%,Y%
 :
 REM set up control block
-?cblock%=0:REM for cblock num
-cblock%?1=&7F
-cblock%?2=port%
-cblock%!3=station%
-cblock%!5=buffer%
-cblock%!9=buffer%+maxlen%
+?cblock=0:REM for cblock num
+cblock?1=&7F
+cblock?2=port%
+cblock!3=station%
+cblock!5=buffer
+cblock!9=buffer+maxlen%
 REM listen
 A%=&11:REM receive
-X%=cblock%
-Y%=cblock% DIV 256
+X%=cblock
+Y%=cblock DIV 256
 CALL OSWORD
 :
 REM poll for reception
 A%=&33:REM poll receive
-X%=?cblock%:PRINT "P";~X%;
+X%=?cblock:PRINT "P";~X%;
 timeout%=TIME+polltimeout%
 REPEAT
 result%=(USR(OSBYTE) AND &8000)
 UNTIL result%<>0 OR TIME>=timeout%
-IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock%:CALL OSBYTE:=-1
+IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock:CALL OSBYTE:=-1
 :
 A%=&11:REM receive
-X%=cblock%
-Y%=cblock% DIV 256
-REM ?cblock% populated above
+X%=cblock
+Y%=cblock DIV 256
+REM ?cblock populated above
 CALL OSWORD
-=cblock%!9-cblock%!5
+=cblock!9-cblock!5
 :
 DEFPROCdelay(n%)
 REM delay n% cs
@@ -568,24 +846,24 @@ IF key$="R" THEN PROCrxtest(station%)
 UNTIL FALSE
 ENDPROC
 :
-DEFFNtx(station%,port%,buffer%,len%)
-REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~len%
-=FNtx_mc(station%,port%,buffer%,len%)
+DEFFNtx(station%,port%,buffer,len%)
+REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~len%
+=FNtx_mc(station%,port%,buffer,len%)
 :
-DEFFNrx(station%,port%,buffer%,maxlen%)
-REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~maxlen%
-=FNrx_mc(station%,port%,buffer%,maxlen%)
+DEFFNrx(station%,port%,buffer,maxlen%)
+REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~maxlen%
+=FNrx_mc(station%,port%,buffer,maxlen%)
 :
 DEFPROCtxtest(station%)
 LOCAL result%
-$buffer%="to:"+STR$(station%)
-result%=FNtx(station%,port%+1,buffer%,LEN($buffer%)+1)
+$buffer="to:"+STR$(station%)
+result%=FNtx(station%,port%+1,buffer,LEN($buffer)+1)
 PRINT "Result=&";~result%
 ENDPROC
 :
 DEFPROCrxtest(station%)
 LOCAL bytes%
-bytes%=FNrx(station%,port%+1,buffer%,buflen%)
+bytes%=FNrx(station%,port%+1,buffer,buflen)
 PRINT "Bytes=";bytes%
-IF bytes%<>-1 THEN PRINT "Received:<";$buffer%;">"
+IF bytes%<>-1 THEN PRINT "Received:<";$buffer;">"
 ENDPROC
