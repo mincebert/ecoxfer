@@ -9,10 +9,12 @@ OSFILE=&FFDD
 OSGBPB=&FFD1
 OSFIND=&FFCE
 OSASCI=&FFE3
+OSNEWL=&FFE7
+OSWRCH=&FFEE
 :
-OP_TXS_INFO=&01
-OP_TXR_NEXT=&81
-OP_TXS_BLK=&02
+OP_HDR=&01
+OP_BLKREQ=&81
+OP_BLKSND=&02
 :
 codebuf%=1600
 DIM code% codebuf%
@@ -74,7 +76,7 @@ IF result%<>1 THEN PRINT "File error":STOP
 len%=buffer!10
 PRINT filename$;" ";~buffer!2;" ";~buffer!6;" ";~len%
 :
-?buffer=OP_TXS_INFO
+?buffer=OP_HDR
 buffer?1=cli_port%
 result%=FNtx(station%,srv_port%,buffer,18+LEN(filename$)+1)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
@@ -90,8 +92,8 @@ REPEAT
 REPEAT
 bytes%=FNrx(station%,cli_port%,buffer,9)
 IF bytes%<>9 THEN PRINT "Illegal next block":STOP
-IF ?buffer<>OP_TXR_NEXT THEN PRINT "Unexpected operation ";~?buffer
-UNTIL ?buffer=OP_TXR_NEXT
+IF ?buffer<>OP_BLKREQ THEN PRINT "Unexpected operation ";~?buffer
+UNTIL ?buffer=OP_BLKREQ
 PRINT ;~buffer!1;" ";
 IF buffer!1<>xfrbytes% THEN PRINT "Error - we're expecting &";~xfrbytes%:STOP
 :
@@ -105,7 +107,7 @@ X%=buffer MOD 256
 Y%=buffer DIV 256
 IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error reading file":STOP
 :
-buffer?8=OP_TXS_BLK
+buffer?8=OP_BLKSND
 buffer!9=xfrbytes%
 result%=FNtx(station%,srv_port%,buffer+8,filebytes%+5)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
@@ -126,7 +128,7 @@ bytes%=FNrx(station%,srv_port%,buffer,buflen)
 IF bytes%<0 THEN PRINT "Nothing received"
 UNTIL bytes%>=0
 IF bytes%<20 THEN PRINT "Illegal info block (too small)":STOP
-IF ?buffer<>OP_TXS_INFO THEN PRINT "Unexpected operation ";~?buffer:STOP
+IF ?buffer<>OP_HDR THEN PRINT "Unexpected operation ";~?buffer:STOP
 :
 station%=cblock!3 AND &FFFF
 port%=buffer?1
@@ -145,14 +147,14 @@ IF fh%=0 THEN PRINT "Error opening file":STOP
 xfrbytes%=0
 REPEAT
 PRINT ;~xfrbytes%;" ";
-?buffer=OP_TXR_NEXT
+?buffer=OP_BLKREQ
 buffer!1=xfrbytes%
 buffer!5=maxxfr%
 result%=FNtx(station%,port%,buffer,9)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
 bytes%=FNrx(station%,srv_port%,buffer+8,maxxfr%+5)
-IF buffer?8<>OP_TXS_BLK THEN PRINT "Invalid block type received":STOP
+IF buffer?8<>OP_BLKSND THEN PRINT "Invalid block type received":STOP
 IF buffer!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
 IF bytes%-5>len%-xfrbytes% THEN PRINT "Oversize block":STOP
 :
@@ -190,71 +192,48 @@ DEFPROCassemble
 FOR pass%=0 TO 1
 P%=code%
 [ OPT pass%*2
-.scratchrestore
-\ pop return addr to scratch 0+1
-PLA
-STA scratch+1
-PLA
-STA scratch
-\ restore scratch 2+
-LDY #scratchsize-3
-.loop
-PLA
-STA scratch+2,Y
-DEY
-BPL loop
-\ return addr in XY
-LDX scratch
-LDY scratch+1
-\ restore scratch 0+1
-PLA
-STA scratch+1
-PLA
-STA scratch
-\ push back our return addr
-TXA
-PHA
-TYA
-PHA
-RTS
-:
 \ --- SEND ---
 :
 .send
-\ Entry - YX=sendblock
-\   sendblock - +0=dest stn
-\               +2=filename addr
+\ Entry - YX=sendblk
+\   sendblk - +0=dest stn
+\             +2=filename addr
 \ Exit  - ?
 :
-\ save scratch 0+1
+\ save scratch
 LDA scratch
 PHA
 LDA scratch+1
 PHA
-\ XY in scratch 0+1
+\ XY in scratch
 STX scratch
 STY scratch+1
-\ save scratch 2+
+\ store peer address
 LDY #0
-.loop
-LDA scratch+2,Y
-PHA
+LDA (scratch),Y
+STA peeraddr
 INY
-CPY #scratchsize-2
-BNE loop
+LDA (scratch),Y
+STA peeraddr+1
+\ store filename addr
+INY
+LDA (scratch),Y
+STA fnameaddr
+INY
+LDA (scratch),Y
+STA fnameaddr+1
+:
+\ GET FILE INFORMATION
 :
 \ copy filename addr to OSFILE
 \ param block
-LDY #2
-LDA (scratch),Y
+LDA fnameaddr
 STA buffer
-INY
-LDA (scratch),Y
+LDA fnameaddr+1
 STA buffer+1
 :
-LDA #ASC"I":JSR OSASCI \ DEBUG=file info
 LDA #5 \ read cat info for file
-LDX #buffer MOD &100
+LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSFILE
 CMP #1 \ =file found
@@ -266,86 +245,98 @@ EQUB 214
 EQUS "File not found"
 EQUB 0
 :
+\ BUILD + TX HEADER
+:
 .filefound
 \ populate buffer to send;
 \ we can use the OSFILE param
 \ block but just change the
 \ first two bytes and put the
 \ filename on the end
-LDA #OP_TXS_INFO
+LDA #OP_HDR
 STA buffer
 LDA #cli_port%
 STA buffer+1
-LDY #2
-LDA (scratch),Y
-STA scratch+2
-INY
-LDA (scratch),Y
-STA scratch+3
+LDA peeraddr
+STA buffer+2
+LDA peeraddr+1
+STA buffer+3
 \ TODO- should trim to leaf name
+LDA fnameaddr
+STA scratch
+LDA fnameaddr+1
+STA scratch+1
 LDY #0
-.filenamecopyloop
-LDA (scratch+2),Y
+.loop
+LDA (scratch),Y
 STA buffer+18,Y
 INY
 CMP #13
-BNE filenamecopyloop
+BNE loop
+:
+\ store size of buffer in cblock
+\ (filename len + 18 bytes for
+\ rest of header)
 TYA
-\ add 18 bytes for rest of
-\ cblock (on top of filename)
 CLC
 ADC #18
 STA cblock+8
 :
-\ set up tx cblock
+\ set up rest of tx cblock
 LDA #srv_port%
 STA cblock+1
-\ copy dest stn
-LDY #0
-LDA (scratch),Y
+\ copy dest addr
+LDA peeraddr
 STA cblock+2
-INY
-LDA (scratch),Y
+LDA peeraddr+1
 STA cblock+3
 \ put start addr in cblock
-LDA #buffer MOD &100
+LDA #buffer AND &FF
 STA cblock+4
 LDA #buffer DIV &100
 STA cblock+5
-LDA #0
-STA cblock+6
-STA cblock+7
-\ put end addr in cblock
-LDA #(buffer+2) MOD &100
+\ put end addr in cblock (start
+\ addr + len calculated above)
+LDA #buffer AND &FF
 ADC cblock+8 \ filename len
 STA cblock+8
-LDA #(buffer+2) DIV &100
+LDA #buffer DIV &100
 ADC #0
 STA cblock+9
 \ never >64K so no need to do
-\ carry
+\ carry - zero top of 32-bit
+\ addrs
 LDA #0
+STA cblock+6
+STA cblock+7
 STA cblock+10
 STA cblock+11
-LDX #cblock MOD &100
+\ do tx
+LDX #cblock AND &FF
 LDY #cblock DIV &100
-LDA #ASC"H":JSR OSASCI \ DEBUG=tx hdr
 JSR tx
 CPX #0
-BEQ txhdrok
+BEQ openin
 JMP neterror
 :
-.txhdrok
+\ PREPARE FOR TX FILE BLOCKS
+:
+.openin
 \ tx header sent - open file
-LDA #ASC"F":JSR OSASCI \ DEBUG=open file
 LDA #&40 \ =openin
-LDX scratch+2
-LDY scratch+3
+LDX fnameaddr
+LDY fnameaddr+1
 JSR OSFIND
 STA fhandle
 TAX
-BEQ openinerror
+BNE openinok
+JSR scratchrestore
+BRK
+EQUB 214
+EQUS "File open error"
+EQUB 0
 :
+.openinok
 \ initialise 'bytes so far'
 LDA #0
 STA xfrbytes
@@ -353,72 +344,218 @@ STA xfrbytes+1
 STA xfrbytes+2
 STA xfrbytes+3
 :
+\ TX REQUEST BLOCK LOOP
+:
+.txblkloop
+:
+\ print next byte expected to tx
+LDA #13 \ back to line start
+JSR OSWRCH
+LDX #xfrbytes AND &FF
+LDY #xfrbytes DIV &100
+JSR wrdouble
+:
+\ TODO- handle if we didn't xfer
+\ all of buffer last time, just
+\ shuffle along what's left
+LDA fhandle
+STA buffer
+\ buffer to read bytes from file
+\ after OSGBPB param block
+\ (which leaves space for
+\ request block, too)
+LDA #(buffer+13) AND &FF
+STA buffer+1
+LDA #(buffer+13) DIV &100
+STA buffer+2
+LDA #0
+STA buffer+5
+LDA #1
+STA buffer+6
+\ zero top of 32-bit addrs
+LDA #0
+STA buffer+3
+STA buffer+4
+STA buffer+7
+STA buffer+8
+LDA #4
+LDX #buffer AND &FF
+LDY #buffer DIV &100
+JSR OSGBPB
+BCC waitblkreq
+:
+\ error reading file - tidy up
+\ and abort
+JMP abortsend
+BRK
+EQUB 214
+EQUS "File read error"
+EQUB 0
+:
+.waitblkreq
 \ set up rx cblock
 LDA #cli_port%
 STA cblock+2
-\ copy dest stn
-LDY #0
-LDA (scratch),Y
+\ copy sender addr
+LDA peeraddr
 STA cblock+3
-INY
-LDA (scratch),Y
+LDA peeraddr+1
 STA cblock+4
 \ set start addr
-LDA #buffer MOD &100
+LDA #buffer AND &FF
 STA cblock+5
 LDA #buffer DIV &100
 STA cblock+6
 \ set end addr
-LDA #(buffer+9) MOD &100
+LDA #(buffer+9) AND &FF
 STA cblock+9
 LDA #(buffer+9) DIV &100
 STA cblock+10
-\ blank top of 32-bit addr
+\ zero top of 32-bit addrs
 LDA #0
 STA cblock+7
 STA cblock+8
 STA cblock+11
 STA cblock+12
-LDX #cblock MOD &100
+LDX #cblock AND &FF
 LDY #cblock DIV &100
 LDA #ASC"B":JSR OSASCI \ DEBUG=rx block req
 JSR rx
 TXA
-BPL noblkreqerror
+BMI chkblkreq
 :
+JSR abortsend
+BRK
+EQUB &42 \ =no scout
+EQUS "Block request timeout"
+EQUB 0
+:
+.chkblkreq
+\ check is block request
+LDA buffer
+CMP #OP_BLKREQ
+BEQ blkreqok
+JSR abortsend
+BRK
+EQUB 100 \ TODO
+EQUS "Expected block request"
+EQUB 0
+:
+.blkreqok
+LDX #(cblock+9) AND &FF
+LDY #(cblock+9) DIV &100
+JSR wrdouble:JSR OSNEWL
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR sbcdouble
+LDX #(cblock+9) AND &FF
+LDY #(cblock+9) DIV &100
+JSR wrdouble:JSR OSNEWL
+LDA #9
+STA cblock+5
 LDA #0
-LDY fhandle
-JSR OSFIND
+STA cblock+6
+STA cblock+7
+STA cblock+8
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR sbcdouble
+LDX #(cblock+9) AND &FF
+LDY #(cblock+9) DIV &100
+JSR wrdouble:JSR OSNEWL
+LDA #0
+STA cblock+5
+STA cblock+6
+STA cblock+7
+STA cblock+8
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR cmpdouble
+BEQ equal
+BMI more
+LDA #ASC"<"
+JMP okdone
+.more
+LDA #ASC">"
+JMP okdone
+.equal
+LDA #ASC"="
 :
+.okdone
+JSR OSASCI
+JSR abortsend
 LDY #0
-.okloop
+.loop
 LDA okmsg,Y
 INY
 JSR OSASCI
 CMP #13
-BNE okloop
-JSR scratchrestore
+BNE loop
 RTS
 .okmsg
 EQUS "OK so far!"
 EQUB 13
 :
-.openinerror
-JSR scratchrestore
-BRK
-EQUB 214
-EQUS "File error"
-EQUB 0
-:
-.noblkreqerror
-LDA #0
+.abortsend
+LDA #0 \ =close
 LDY fhandle
 JSR OSFIND
-JSR scratchrestore
-BRK
-EQUB &42 \ =no scout
-EQUS "Block request error"
-EQUB 0
+JMP scratchrestore \ JMP>RTS
+:
+.sbcdouble
+STX scratch
+STY scratch+1
+SEC
+LDY #4
+LDA (scratch),Y
+LDY #0
+SBC (scratch),Y
+LDY #4
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #1
+SBC (scratch),Y
+LDY #5
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #2
+SBC (scratch),Y
+LDY #6
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #3
+SBC (scratch),Y
+LDY #7
+STA (scratch),Y
+RTS
+:
+.cmpdouble
+STX scratch
+STY scratch+1
+LDY #4
+LDA (scratch),Y
+LDY #0
+CMP (scratch),Y
+BNE cmpdone
+LDY #5
+LDA (scratch),Y
+LDY #1
+CMP (scratch),Y
+BNE cmpdone
+LDY #6
+LDA (scratch),Y
+LDY #2
+CMP (scratch),Y
+BNE cmpdone
+LDY #7
+LDA (scratch),Y
+LDY #3
+CMP (scratch),Y
+.cmpdone
+RTS
 :
 .neterror
 \ calculate offset of this error
@@ -466,14 +603,28 @@ EQUB &44
 EQUS "Bad control block"
 EQUB 0
 :
-.scratch_restoren
-LDY #0
-.scratchrestorenloop
+.scratchrestore
+\ restore scratch bytes assuming
+\ they're at the top of the
+\ stack, underneath the return
+\ address added by a JSR
+\ Entry - stack as above
+\ Exit  - AXY undefined
+\ pop my return addr to YX
 PLA
-STA scratch,Y
-INY
-CPY #scratchsize
-BNE scratchrestorenloop
+TAY
+PLA
+TAX
+\ restore scratch
+PLA
+STA scratch+1
+PLA
+STA scratch
+\ push my return addr
+TXA
+PHA
+TYA
+PHA
 RTS
 :
 \ --- TX ---
@@ -681,8 +832,11 @@ EQUB 0
 .errorcode
 EQUB 0
 :
-.peer
+.peeraddr
 EQUW 0 \ stn.net
+:
+.fnameaddr
+EQUW 0
 :
 .xfrbytes
 EQUD 0
@@ -701,6 +855,28 @@ EQUB 0
 EQUB 0
 EQUB 0
 EQUB 0
+:
+\ GENERAL ROUTINES
+:
+.wrdouble
+STX scratch
+STY scratch+1
+LDX #0
+LDY #3
+.loop
+LDA (scratch),Y
+BNE wrdoublehex
+CPX #0
+BNE wrdoublehex
+CPY #0
+BNE skipwrdoublehex
+.wrdoublehex
+JSR wrhex
+INX
+.skipwrdoublehex
+DEY
+BPL loop
+RTS
 :
 .wrhex
 PHA
