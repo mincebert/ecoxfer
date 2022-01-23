@@ -190,29 +190,58 @@ DEFPROCassemble
 FOR pass%=0 TO 1
 P%=code%
 [ OPT pass%*2
+.scratchrestore
+\ pop return addr to scratch 0+1
+PLA
+STA scratch+1
+PLA
+STA scratch
+\ restore scratch 2+
+LDY #scratchsize-3
+.loop
+PLA
+STA scratch+2,Y
+DEY
+BPL loop
+\ return addr in XY
+LDX scratch
+LDY scratch+1
+\ restore scratch 0+1
+PLA
+STA scratch+1
+PLA
+STA scratch
+\ push back our return addr
+TXA
+PHA
+TYA
+PHA
+RTS
+:
 \ --- SEND ---
 :
 .send
 \ Entry - YX=sendblock
+\   sendblock - +0=dest stn
+\               +2=filename addr
 \ Exit  - ?
-\ sendblock - +0=dest stn
-\             +2=filename addr
 :
-\ preserve scratch on stack
+\ save scratch 0+1
 LDA scratch
 PHA
 LDA scratch+1
 PHA
-\ XY address in scratch
+\ XY in scratch 0+1
 STX scratch
 STY scratch+1
-\ preserve rest of scratch
-LDY #scratchsize-2
-.scratchsaveloop
-LDA scratch+1,Y
+\ save scratch 2+
+LDY #0
+.loop
+LDA scratch+2,Y
 PHA
-DEY
-BEQ scratchsaveloop
+INY
+CPY #scratchsize-2
+BNE loop
 :
 \ copy filename addr to OSFILE
 \ param block
@@ -231,8 +260,9 @@ JSR OSFILE
 CMP #1 \ =file found
 BEQ filefound
 \ not found
+JSR scratchrestore
 BRK
-EQUB 0
+EQUB 214
 EQUS "File not found"
 EQUB 0
 :
@@ -277,7 +307,7 @@ STA cblock+2
 INY
 LDA (scratch),Y
 STA cblock+3
-\ set start addr
+\ put start addr in cblock
 LDA #buffer MOD &100
 STA cblock+4
 LDA #buffer DIV &100
@@ -285,7 +315,7 @@ STA cblock+5
 LDA #0
 STA cblock+6
 STA cblock+7
-\ set end addr
+\ put end addr in cblock
 LDA #(buffer+2) MOD &100
 ADC cblock+8 \ filename len
 STA cblock+8
@@ -367,14 +397,16 @@ INY
 JSR OSASCI
 CMP #13
 BNE okloop
-JMP scratch_restoren \ JMP>RTS
+JSR scratchrestore
+RTS
 .okmsg
 EQUS "OK so far!"
 EQUB 13
 :
 .openinerror
+JSR scratchrestore
 BRK
-EQUB 0
+EQUB 214
 EQUS "File error"
 EQUB 0
 :
@@ -382,58 +414,57 @@ EQUB 0
 LDA #0
 LDY fhandle
 JSR OSFIND
+JSR scratchrestore
 BRK
-EQUB 0
+EQUB &42 \ =no scout
 EQUS "Block request error"
 EQUB 0
 :
 .neterror
 \ calculate offset of this error
 \ in the message addr table
-TXA
-SEC
-SBC #&40
-ASL A
-TAX
-LDA neterrormsgtbl,X
-STA scratch
-LDA neterrormsgtbl+1,X
-STA scratch+1
-:
-LDY #0
-.neterrorloop
-LDA (scratch),Y
-INY
-JSR OSASCI
-CMP #13
-BNE neterrorloop
-JMP scratch_restoren \ JMP>RTS
-:
-.neterrormsgtbl
-EQUW linejammsg
-EQUW handshkmsg
-EQUW noscoutmsg
-EQUW noclockmsg
-EQUW badtxblock
-.linejammsg
+STX errorcode
+JSR scratchrestore
+LDX errorcode
+CPX #&40
+BEQ linejamerr
+CPX #&41
+BEQ handshkerr
+CPX #&42
+BEQ noscouterr
+CPX #&43
+BEQ noclockerr
+CPX #&44
+BEQ badtxblkerr
+BRK
+EQUB 255
+EQUS "Unknown error"
+EQUB 0
+.linejamerr
+BRK
+EQUB &40
 EQUS "Line jammed"
-EQUB 13
-.handshkmsg
+EQUB 0
+.handshkerr
+BRK
+EQUB &41
 EQUS "Net error"
-EQUB 13
-.noscoutmsg
+EQUB 0
+.noscouterr
+BRK
+EQUB &42
 EQUS "Not listening"
-EQUB 13
-.noclockmsg
+EQUB 0
+.noclockerr
+BRK
+EQUB &43
 EQUS "No clock"
-EQUB 13
-.badtxblock
+EQUB 0
+.badtxblkerr
+BRK
+EQUB &44
 EQUS "Bad control block"
-EQUB 13
-:
-.neterrormsg
-EQUS "Network error "
-EQUB 13
+EQUB 0
 :
 .scratch_restoren
 LDY #0
@@ -642,8 +673,16 @@ CMP timeout
 .timeout_checked
 RTS
 :
+\ --- variable storage ---
+:
 .fhandle
 EQUB 0
+::
+.errorcode
+EQUB 0
+:
+.peer
+EQUW 0 \ stn.net
 :
 .xfrbytes
 EQUD 0
