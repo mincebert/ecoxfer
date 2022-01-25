@@ -419,7 +419,6 @@ STA cblock+11
 STA cblock+12
 LDX #cblock AND &FF
 LDY #cblock DIV &100
-LDA #ASC"B":JSR OSASCI \ DEBUG=rx block req
 JSR rx
 TXA
 BMI chkblkreq
@@ -438,19 +437,15 @@ BEQ blkreqok
 JSR abortsend
 BRK
 EQUB 100 \ TODO
-EQUS "Expected block request"
+EQUS "Not block request"
 EQUB 0
 :
 .blkreqok
-LDX #(cblock+9) AND &FF
-LDY #(cblock+9) DIV &100
-JSR wrdouble:JSR OSNEWL
+\ end-start=bytes received
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR sbcdouble
-LDX #(cblock+9) AND &FF
-LDY #(cblock+9) DIV &100
-JSR wrdouble:JSR OSNEWL
+JSR sbcd
+\ confirm bytes=9
 LDA #9
 STA cblock+5
 LDA #0
@@ -459,27 +454,50 @@ STA cblock+7
 STA cblock+8
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR sbcdouble
-LDX #(cblock+9) AND &FF
-LDY #(cblock+9) DIV &100
-JSR wrdouble:JSR OSNEWL
+JSR cmpd
+BEQ chkmaxxfr
+JSR abortsend
+BRK
+EQUB 20 \ =Too big
+EQUS "Block request size"
+EQUB 0
+:
+.chkmaxxfr
+\ check maxxfr is 256 or less
 LDA #0
-STA cblock+5
-STA cblock+6
-STA cblock+7
-STA cblock+8
-LDX #(cblock+5) AND &FF
-LDY #(cblock+5) DIV &100
-JSR cmpdouble
-BEQ equal
-BMI more
-LDA #ASC"<"
-JMP okdone
-.more
-LDA #ASC">"
-JMP okdone
-.equal
-LDA #ASC"="
+STA buffer+9
+STA buffer+11
+STA buffer+12
+LDA #1
+STA buffer+10
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR cmpd
+BEQ chkoffset \ TODO- make BPL and handle smaller xfers
+JSR abortsend
+BRK
+EQUB 20 \ =Too big
+EQUS "Block request maxxfr"
+EQUB 0
+:
+.chkoffset
+\ copy expected offset into
+\ buffer and compare with recv'd
+LDY #3
+.loop
+LDA xfrbytes,Y
+STA buffer+5,Y
+DEY
+BPL loop
+LDX #(buffer+1) AND &FF
+LDY #(buffer+1) DIV &100
+JSR cmpd
+BEQ okdone
+JSR abortsend
+BRK
+EQUB 100 \ TODO
+EQUS "Block request offset"
+EQUB 0
 :
 .okdone
 JSR OSASCI
@@ -501,61 +519,6 @@ LDA #0 \ =close
 LDY fhandle
 JSR OSFIND
 JMP scratchrestore \ JMP>RTS
-:
-.sbcdouble
-STX scratch
-STY scratch+1
-SEC
-LDY #4
-LDA (scratch),Y
-LDY #0
-SBC (scratch),Y
-LDY #4
-STA (scratch),Y
-INY
-LDA (scratch),Y
-LDY #1
-SBC (scratch),Y
-LDY #5
-STA (scratch),Y
-INY
-LDA (scratch),Y
-LDY #2
-SBC (scratch),Y
-LDY #6
-STA (scratch),Y
-INY
-LDA (scratch),Y
-LDY #3
-SBC (scratch),Y
-LDY #7
-STA (scratch),Y
-RTS
-:
-.cmpdouble
-STX scratch
-STY scratch+1
-LDY #4
-LDA (scratch),Y
-LDY #0
-CMP (scratch),Y
-BNE cmpdone
-LDY #5
-LDA (scratch),Y
-LDY #1
-CMP (scratch),Y
-BNE cmpdone
-LDY #6
-LDA (scratch),Y
-LDY #2
-CMP (scratch),Y
-BNE cmpdone
-LDY #7
-LDA (scratch),Y
-LDY #3
-CMP (scratch),Y
-.cmpdone
-RTS
 :
 .neterror
 \ calculate offset of this error
@@ -822,6 +785,70 @@ BNE timeout_checked
 LDA now
 CMP timeout
 .timeout_checked
+RTS
+:
+.sbcd
+\ subtract 32-bit doubles Q-P,
+\ result in Q
+\ Entry - YX=addr of block
+\   block - +0-3=P,+4-7=Q
+\ Exit  - AXY=undefined,CZN=set
+STX scratch
+STY scratch+1
+SEC
+LDY #4
+LDA (scratch),Y
+LDY #0
+SBC (scratch),Y
+LDY #4
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #1
+SBC (scratch),Y
+LDY #5
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #2
+SBC (scratch),Y
+LDY #6
+STA (scratch),Y
+INY
+LDA (scratch),Y
+LDY #3
+SBC (scratch),Y
+LDY #7
+STA (scratch),Y
+RTS
+:
+.cmpd
+\ compare 32-bit doubles Q-P
+\ Entry - YX=addr of block
+\   block - +0-3=P,+4-7=Q
+\ Exit  - AXY=undefined,CZN=set
+STX scratch
+STY scratch+1
+LDY #4
+LDA (scratch),Y
+LDY #0
+CMP (scratch),Y
+BNE cmpdone
+LDY #5
+LDA (scratch),Y
+LDY #1
+CMP (scratch),Y
+BNE cmpdone
+LDY #6
+LDA (scratch),Y
+LDY #2
+CMP (scratch),Y
+BNE cmpdone
+LDY #7
+LDA (scratch),Y
+LDY #3
+CMP (scratch),Y
+.cmpdone
 RTS
 :
 \ --- variable storage ---
