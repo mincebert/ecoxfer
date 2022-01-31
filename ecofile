@@ -368,6 +368,7 @@ LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
+\ size = 256 bytes
 LDA #0
 STA buffer+5
 LDA #1
@@ -382,7 +383,7 @@ LDA #4
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSGBPB
-BCC waitblkreq
+BCC storebytesread
 :
 \ error reading file - tidy up
 \ and abort
@@ -392,6 +393,8 @@ EQUB 214
 EQUS "File read error"
 EQUB 0
 :
+.storebytesread
+\ TODO- how many bytes xferred?
 .waitblkreq
 \ set up rx cblock
 LDA #cli_port%
@@ -437,7 +440,7 @@ BEQ blkreqok
 JSR abortsend
 BRK
 EQUB 100 \ TODO
-EQUS "Not block request"
+EQUS "Expected block request"
 EQUB 0
 :
 .blkreqok
@@ -498,6 +501,35 @@ BRK
 EQUB 100 \ TODO
 EQUS "Block request offset"
 EQUB 0
+:
+.buildblksnd
+\ copy offset from buffer+5 to
+\ buffer+9 (just before data
+\ read by OSGBPB)
+LDY #3
+.loop
+LDA buffer+5,Y
+STA buffer+9,Y
+DEY
+BPL loop
+\ store block type
+LDA #OP_BLKSND
+STA buffer+8
+\ build tx cblock
+LDA peeraddr
+STA cblock+1
+LDA peeraddr+1
+STA cblock+2
+LDA #(buffer+8) AND &FF
+STA cblock+4
+LDA #(buffer+8) DIV &100
+STA cblock+5
+CLC
+LDA #(buffer+8) AND &FF
+ADC
+LDA #0
+STA cblock+6
+STA cblock+7
 :
 .okdone
 JSR OSASCI
@@ -863,9 +895,17 @@ EQUB 0
 EQUW 0 \ stn.net
 :
 .fnameaddr
+\ address of filename entered by
+\ user
 EQUW 0
 :
 .xfrbytes
+\ bytes transferred => offset
+\ of next byte to transfer
+EQUD 0
+:
+.bufferuse
+\ bytes of data in buffer
 EQUD 0
 :
 .now
