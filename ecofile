@@ -35,6 +35,12 @@ DIM cblock 13,buffer buflen
 DIM F 100,S 20
 :
 PROCassemble
+buffer!0=&10203040
+buffer!4=&0A0B0C0D
+X%=buffer
+Y%=buffer DIV &100
+PRINT ~USR(sbcd),~buffer!4
+STOP
 :
 REM test send routine
 $F="T1"
@@ -312,7 +318,8 @@ STA cblock+8
 LDA #buffer DIV &100
 ADC #0
 STA cblock+9
-\ never >64K so no need to do
+\ never >64K so no ne
+VALMPLOTo do
 \ carry - zero top of 32-bit
 \ addrs
 LDA #0
@@ -841,38 +848,34 @@ CMP timeout
 RTS
 :
 .sbcd
-\ subtract 32-bit doubles Q-P,
+\ subtract 32-bit doubles P-Q,
 \ result in Q
 \ Entry - YX=addr of block
 \   block - +0-3=P,+4-7=Q
-\ Exit  - AXY=undefined,CZN=set
+\ Exit  - AXY=undefined
+\         CZN=as SBC
 STX scratch
 STY scratch+1
 SEC
-LDY #4
-LDA (scratch),Y
 LDY #0
-SBC (scratch),Y
-LDY #4
-STA (scratch),Y
-INY
+.loop
 LDA (scratch),Y
-LDY #1
-SBC (scratch),Y
-LDY #5
-STA (scratch),Y
+INY \ move to same byte in Q
 INY
-LDA (scratch),Y
-LDY #2
-SBC (scratch),Y
-LDY #6
-STA (scratch),Y
 INY
-LDA (scratch),Y
-LDY #3
+INY
 SBC (scratch),Y
-LDY #7
 STA (scratch),Y
+PHP \ flags for iter or return
+CPY #7 \ finished
+BEQ sbcddone
+DEY \ move to next byte in P
+DEY
+DEY
+PLP
+JMP loop
+.sbcddone
+PLP
 RTS
 :
 .cmpd
@@ -880,7 +883,7 @@ RTS
 \ Entry - YX=addr of block
 \   block - +0-3=P,+4-7=Q
 \ Exit  - AXY=undefined
-\         Z=same,C=(Q>=P)
+\         CZN=as CMP
 STX scratch
 STY scratch+1
 CLC
@@ -910,7 +913,7 @@ RTS
 \ Exit  - AXY=undefined
 \   block +0=min
 JSR cmpd
-BCS cmpddone
+BCS minddone
 LDY #3
 .loop
 INY
@@ -925,6 +928,7 @@ DEY
 STA (scratch),Y
 DEY
 BPL loop
+.minddone
 RTS
 :
 \ --- variable storage ---
