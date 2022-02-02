@@ -248,6 +248,15 @@ EQUB 0
 \ BUILD + TX HEADER
 :
 .filefound
+\ store length of file as
+\ remaining bytes
+LDY #3
+.loop
+LDA buffer+10,Y
+STA xfrremain,Y
+DEY
+BPL loop
+:
 \ populate buffer to send;
 \ we can use the OSFILE param
 \ block but just change the
@@ -322,7 +331,6 @@ JMP neterror
 \ PREPARE FOR TX FILE BLOCKS
 :
 .openin
-\ tx header sent - open file
 LDA #&40 \ =openin
 LDX fnameaddr
 LDY fnameaddr+1
@@ -368,17 +376,30 @@ LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
-\ size = 256 bytes
-LDA #0
-STA buffer+5
-LDA #1
-STA buffer+6
-\ zero top of 32-bit addrs
 LDA #0
 STA buffer+3
 STA buffer+4
-STA buffer+7
-STA buffer+8
+\ size = min(256,remain)
+STA cmpdbuff1
+STA cmpdbuff1+2
+STA cmpdbuff1+3
+LDA #1
+STA cmpdbuff1+1
+LDY #3
+.loop
+LDA xfrremain,Y
+STA cmpdbuff2,Y
+DEY
+BPL loop
+LDX #cmpdbuff AND &FF
+LDY #cmpdbuff DIV &100
+JSR mind \ min in cmpdbuff1
+LDY #3
+.loop
+LDA cmpdbuff1,Y
+STA buffer+5,Y
+DEY
+BPL loop
 LDA #4
 LDX #buffer AND &FF
 LDY #buffer DIV &100
@@ -526,7 +547,7 @@ LDA #(buffer+8) DIV &100
 STA cblock+5
 CLC
 LDA #(buffer+8) AND &FF
-ADC
+ADC #1 \ ???? TODO
 LDA #0
 STA cblock+6
 STA cblock+7
@@ -855,39 +876,62 @@ STA (scratch),Y
 RTS
 :
 .cmpd
-\ compare 32-bit doubles Q-P
+\ compare 32-bit doubles P-Q
 \ Entry - YX=addr of block
 \   block - +0-3=P,+4-7=Q
-\ Exit  - AXY=undefined,CZN=set
+\ Exit  - AXY=undefined
+\         Z=same,C=(Q>=P)
 STX scratch
 STY scratch+1
-LDY #4
-LDA (scratch),Y
-LDY #0
-CMP (scratch),Y
-BNE cmpdone
-LDY #5
-LDA (scratch),Y
-LDY #1
-CMP (scratch),Y
-BNE cmpdone
-LDY #6
-LDA (scratch),Y
-LDY #2
-CMP (scratch),Y
-BNE cmpdone
+CLC
 LDY #7
+.loop
 LDA (scratch),Y
-LDY #3
+DEY
+DEY
+DEY
+DEY
+BEQ cmpdlast
 CMP (scratch),Y
-.cmpdone
+BNE cmpddone
+INY
+INY
+INY
+JMP loop
+.cmpdlast
+CMP (scratch),Y
+.cmpddone
+RTS
+:
+.mind
+\ compare 32-bit doubles P-Q
+\ Entry - YX=addr of block
+\   block +0-3=P,+4-7=Q
+\ Exit  - AXY=undefined
+\   block +0=min
+JSR cmpd
+BCS cmpddone
+LDY #3
+.loop
+INY
+INY
+INY
+INY
+LDA (scratch),Y
+DEY
+DEY
+DEY
+DEY
+STA (scratch),Y
+DEY
+BPL loop
 RTS
 :
 \ --- variable storage ---
 :
 .fhandle
 EQUB 0
-::
+:
 .errorcode
 EQUB 0
 :
@@ -900,12 +944,24 @@ EQUW 0 \ stn.net
 EQUW 0
 :
 .xfrbytes
-\ bytes transferred => offset
-\ of next byte to transfer
+\ bytes transferred so far =>
+\ offset of next byte
+EQUD 0
+:
+.xfrremain
+\ remaining bytes to transfer
 EQUD 0
 :
 .bufferuse
 \ bytes of data in buffer
+EQUD 0
+:
+.cmpdbuff
+\ temporary buffer for cmpd
+\ doubles for comparisons, etc.
+.cmpdbuff1
+EQUD 0
+.cmpdbuff2
 EQUD 0
 :
 .now
