@@ -35,12 +35,6 @@ DIM cblock 13,buffer buflen
 DIM F 100,S 20
 :
 PROCassemble
-buffer!0=&10203040
-buffer!4=&0A0B0C0D
-X%=buffer
-Y%=buffer DIV &100
-PRINT ~USR(sbcd),~buffer!4
-STOP
 :
 REM test send routine
 $F="T1"
@@ -202,9 +196,11 @@ P%=code%
 :
 .send
 \ Entry - YX=sendblk
-\   sendblk - +0=dest stn
-\             +2=filename addr
-\ Exit  - ?
+\   sendblk +0=dest stn
+\           +2=filename addr
+\ Exit  - AXY=undefined
+:
+\ SETUP AND GET PARAMS
 :
 \ save scratch
 LDA scratch
@@ -214,6 +210,7 @@ PHA
 \ XY in scratch
 STX scratch
 STY scratch+1
+:
 \ store peer address
 LDY #0
 LDA (scratch),Y
@@ -238,12 +235,12 @@ STA buffer
 LDA fnameaddr+1
 STA buffer+1
 :
-LDA #5 \ read cat info for file
+LDA #5 \ =read info for file
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSFILE
 CMP #1 \ =file found
-BEQ filefound
+BEQ savefilelen
 \ not found
 JSR scratchrestore
 BRK
@@ -251,11 +248,9 @@ EQUB 214
 EQUS "File not found"
 EQUB 0
 :
-\ BUILD + TX HEADER
-:
-.filefound
-\ store length of file as
-\ remaining bytes
+.savefilelen
+\ store file len as remaining
+\ bytes
 LDY #3
 .loop
 LDA buffer+10,Y
@@ -263,11 +258,52 @@ STA xfrremain,Y
 DEY
 BPL loop
 :
+\ print file info
+LDA fnameaddr
+STA scratch
+LDA fnameaddr+1
+STA scratch+1
+LDY #0
+.loop
+LDA (scratch),Y
+CMP #13
+BEQ printfileval
+JSR OSASCI
+INY
+JMP loop
+:
+.printfileval
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ load addr
+LDX #(buffer+2) AND &FF
+LDY #(buffer+2) DIV &100
+JSR wrdouble
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ exec addr
+LDX #(buffer+6) AND &FF
+LDY #(buffer+6) DIV &100
+JSR wrdouble
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ len
+LDX #(buffer+10) AND &FF
+LDY #(buffer+10) DIV &100
+JSR wrdouble
+JSR OSNEWL
+:
+\ BUILD + SEND FILE HEADER
+:
 \ populate buffer to send;
 \ we can use the OSFILE param
 \ block but just change the
-\ first two bytes and put the
-\ filename on the end
+\ first two bytes and append
+\ the filename
+:
 LDA #OP_HDR
 STA buffer
 LDA #cli_port%
@@ -276,6 +312,7 @@ LDA peeraddr
 STA buffer+2
 LDA peeraddr+1
 STA buffer+3
+:
 \ TODO- should trim to leaf name
 LDA fnameaddr
 STA scratch
@@ -289,15 +326,24 @@ INY
 CMP #13
 BNE loop
 :
+\ build tx cblock
+:
 \ store size of buffer in cblock
 \ (filename len + 18 bytes for
 \ rest of header)
 TYA
-CLC
-ADC #18
+\ C=1 from CMP above as equal;
+\ we also know this won't carry
+\ as filename short
+ADC #17
+ADC #buffer AND &FF \ may carry
 STA cblock+8
+LDA #buffer DIV &100
+ADC #0
+STA cblock+9
+\ blank top bytes below
 :
-\ set up rest of tx cblock
+\ store dest port
 LDA #srv_port%
 STA cblock+1
 \ copy dest addr
@@ -305,28 +351,21 @@ LDA peeraddr
 STA cblock+2
 LDA peeraddr+1
 STA cblock+3
-\ put start addr in cblock
+:
+\ put buffer addr in cblock
 LDA #buffer AND &FF
 STA cblock+4
 LDA #buffer DIV &100
 STA cblock+5
-\ put end addr in cblock (start
-\ addr + len calculated above)
-LDA #buffer AND &FF
-ADC cblock+8 \ filename len
-STA cblock+8
-LDA #buffer DIV &100
-ADC #0
-STA cblock+9
-\ never >64K so no ne
-VALMPLOTo do
-\ carry - zero top of 32-bit
-\ addrs
+\ never >64K so no need to do
+\ carry - zero top of both
+\ 32-bit addrs
 LDA #0
 STA cblock+6
 STA cblock+7
 STA cblock+10
 STA cblock+11
+:
 \ do tx
 LDX #cblock AND &FF
 LDY #cblock DIV &100
@@ -363,16 +402,12 @@ STA xfrbytes+3
 :
 .txblkloop
 :
-\ print next byte expected to tx
-LDA #13 \ back to line start
-JSR OSWRCH
-LDX #xfrbytes AND &FF
-LDY #xfrbytes DIV &100
-JSR wrdouble
-:
 \ TODO- handle if we didn't xfer
 \ all of buffer last time, just
 \ shuffle along what's left
+:
+\ build OSGBPB block
+:
 LDA fhandle
 STA buffer
 \ buffer to read bytes from file
@@ -386,28 +421,25 @@ STA buffer+2
 LDA #0
 STA buffer+3
 STA buffer+4
-\ size = min(256,remain)
-STA cmpdbuff1
-STA cmpdbuff1+2
-STA cmpdbuff1+3
+\ size = min(256,remain); use
+\ mind across buffer+5,9 since
+\ we don't need anything in +9
+STA buffer+5
+STA buffer+7
+STA buffer+8
 LDA #1
-STA cmpdbuff1+1
+STA buffer+6
 LDY #3
 .loop
 LDA xfrremain,Y
-STA cmpdbuff2,Y
+STA buffer+9,Y
 DEY
 BPL loop
-LDX #cmpdbuff AND &FF
-LDY #cmpdbuff DIV &100
-JSR mind \ min in cmpdbuff1
-LDY #3
-.loop
-LDA cmpdbuff1,Y
-STA buffer+5,Y
-DEY
-BPL loop
-LDA #4
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR mindbl \ min in buffer+5
+:
+LDA #4 \ =read at current pos
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSGBPB
@@ -417,11 +449,18 @@ BCC storebytesread
 \ and abort
 JMP abortsend
 BRK
-EQUB 214
+EQUB 189 \ =Access violation
 EQUS "File read error"
 EQUB 0
 :
 .storebytesread
+\ print next byte expected to tx
+LDA #13 \ CR but not LF
+JSR OSWRCH
+LDX #xfrbytes AND &FF
+LDY #xfrbytes DIV &100
+JSR wrdouble
+:
 \ TODO- how many bytes xferred?
 .waitblkreq
 \ set up rx cblock
@@ -475,17 +514,17 @@ EQUB 0
 \ end-start=bytes received
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR sbcd
+JSR sbcdbl
 \ confirm bytes=9
 LDA #9
-STA cblock+5
+STA cblock+9
 LDA #0
-STA cblock+6
-STA cblock+7
-STA cblock+8
+STA cblock+10
+STA cblock+11
+STA cblock+12
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR cmpd
+JSR cmpdbl
 BEQ chkmaxxfr
 JSR abortsend
 BRK
@@ -503,7 +542,7 @@ LDA #1
 STA buffer+10
 LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
-JSR cmpd
+JSR cmpdbl
 BEQ chkoffset \ TODO- make BPL and handle smaller xfers
 JSR abortsend
 BRK
@@ -522,7 +561,7 @@ DEY
 BPL loop
 LDX #(buffer+1) AND &FF
 LDY #(buffer+1) DIV &100
-JSR cmpd
+JSR cmpdbl
 BEQ okdone
 JSR abortsend
 BRK
@@ -847,43 +886,47 @@ CMP timeout
 .timeout_checked
 RTS
 :
-.sbcd
-\ subtract 32-bit doubles P-Q,
-\ result in Q
+.sbcdbl
+\ subtract 32-bit doubles Q-P,
 \ Entry - YX=addr of block
-\   block - +0-3=P,+4-7=Q
-\ Exit  - AXY=undefined
-\         CZN=as SBC
+\   block +0-3=P,+4-7=Q
+\ Exit  -
+\   AXY=undefined, CZN=as SBC
+\   block +0-3=(Q-P)
+\   overwrites scratch
 STX scratch
 STY scratch+1
 SEC
-LDY #0
+LDY #4
 .loop
-LDA (scratch),Y
-INY \ move to same byte in Q
-INY
-INY
-INY
+LDA (scratch),Y \ get byte in Q
+DEY \ move to same byte in P
+DEY
+DEY
+DEY
 SBC (scratch),Y
 STA (scratch),Y
 PHP \ flags for iter or return
-CPY #7 \ finished
-BEQ sbcddone
-DEY \ move to next byte in P
-DEY
-DEY
+CPY #3 \ finished
+BEQ sbcdbldone
+INY \ move to next byte in Q
+INY
+INY
+INY
+INY
 PLP
 JMP loop
-.sbcddone
+.sbcdbldone
 PLP
 RTS
 :
-.cmpd
+.cmpdbl
 \ compare 32-bit doubles P-Q
 \ Entry - YX=addr of block
-\   block - +0-3=P,+4-7=Q
-\ Exit  - AXY=undefined
-\         CZN=as CMP
+\   block +0-3=P,+4-7=Q
+\ Exit  -
+\   AXY=undefined,CZN=as CMP
+\   overwrites scratch
 STX scratch
 STY scratch+1
 CLC
@@ -894,26 +937,27 @@ DEY
 DEY
 DEY
 DEY
-BEQ cmpdlast
+BEQ cmpdbllast
 CMP (scratch),Y
-BNE cmpddone
+BNE cmpdbldone
 INY
 INY
 INY
 JMP loop
-.cmpdlast
+.cmpdbllast
 CMP (scratch),Y
-.cmpddone
+.cmpdbldone
 RTS
 :
-.mind
-\ compare 32-bit doubles P-Q
+.mindbl
+\ min of 32-bit doubles P,Q
 \ Entry - YX=addr of block
 \   block +0-3=P,+4-7=Q
 \ Exit  - AXY=undefined
-\   block +0=min
-JSR cmpd
-BCS minddone
+\   block +0=min(P,Q)
+\   overwrites scratch
+JSR cmpdbl
+BCS mindbldone
 LDY #3
 .loop
 INY
@@ -928,7 +972,7 @@ DEY
 STA (scratch),Y
 DEY
 BPL loop
-.minddone
+.mindbldone
 RTS
 :
 \ --- variable storage ---
@@ -960,12 +1004,13 @@ EQUD 0
 \ bytes of data in buffer
 EQUD 0
 :
-.cmpdbuff
-\ temporary buffer for cmpd
+.cmpdblbuff
+\ temporary buffer for cmpdbl
 \ doubles for comparisons, etc.
-.cmpdbuff1
+\ TODO- do we need this?
+.cmpdblbuff1
 EQUD 0
-.cmpdbuff2
+.cmpdblbuff2
 EQUD 0
 :
 .now
@@ -986,37 +1031,51 @@ EQUB 0
 \ GENERAL ROUTINES
 :
 .wrdouble
+\ write 32-bit double in hex
+\ Entry - YX=addr of double
+\ Exit  - AXY=undefined
+\   overwrites scratch
 STX scratch
 STY scratch+1
-LDX #0
-LDY #3
+LDX #0 \ in leading zeros flag
+LDY #3 \ byte #; start at MSB
 .loop
 LDA (scratch),Y
-BNE wrdoublehex
-CPX #0
-BNE wrdoublehex
-CPY #0
-BNE skipwrdoublehex
+BNE wrdoublehex \ <>0 - write
+CPX #0 \ leading zeroes?
+BNE wrdoublehex \ no - write
+CPY #0 \ last digit?
+BNE skipwrdoublehex \ no - skip
 .wrdoublehex
-JSR wrhex
-INX
+JSR wrbyte
+INX \ set not in leading zeros
 .skipwrdoublehex
-DEY
+DEY \ move to next byte MSB->LSB
 BPL loop
 RTS
 :
-.wrhex
+.wrbyte
+\ write a single hex byte
+\ Entry - A=byte
+\ Exit  - AXY=preserved
 PHA
-LSR A
+LSR A \ shift high nibble to low
 LSR A
 LSR A
 LSR A
 JSR wrnibble
 PLA
-AND #&0F
-JMP wrnibble \ JMP>RTS
+PHA
+AND #&0F \ get low nibble
+JSR wrnibble
+PLA
+RTS
 :
 .wrnibble
+\ write a single hex digit
+\ Entry - A[0-3]=nibble
+\          [4-7]=must be 0
+\ Exit  - AXY=undefined
 SED
 CMP #10
 ADC #&30
@@ -1024,6 +1083,7 @@ CLD
 JMP OSASCI \ JMP>RTS
 :
 .wrreg
+\ DEBUG- write out registers
 PHA
 LDA #ASC"("
 JSR OSASCI
@@ -1032,23 +1092,33 @@ LDA #ASC"A"
 JSR OSASCI
 PLA
 PHA
-JSR wrhex
+JSR wrbyte
+:
+LDA #ASC" "
+JSR OSASCI
 :
 LDA #ASC"X"
 JSR OSASCI
 TXA
-JSR wrhex
+JSR wrbyte
+:
+LDA #ASC" "
+JSR OSASCI
 :
 LDA #ASC"Y"
 JSR OSASCI
 TYA
-JSR wrhex
+JSR wrbyte
 :
 LDA #ASC")"
 JSR OSASCI
 PLA
 RTS
 ]
+:
+REM this test is shakey if the
+REM code block has overrun
+REM following variables
 IF P%-code%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
 NEXT
 PRINT "Code assembled at &";~code%;"+";~P%-code%
