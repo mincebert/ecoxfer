@@ -26,8 +26,9 @@ rxtimeout%=500
 :
 polldelay%=10
 polltimeout%=500
-maxxfr=256
-buflen=maxxfr+13:REM +13 for OSGBPB param block
+maxxfr=256:REM in single packet
+readbytes=maxxfr:REM bytes read by OSGBPB must be >=maxxfr
+buflen=readbytes+13:REM +13 for OSGBPB param block
 srv_port%=100
 cli_port%=101
 DIM cblock 13,buffer buflen
@@ -406,8 +407,6 @@ STA xfrbytes+2
 STA xfrbytes+3
 STA bufferbytes
 STA bufferbytes+1
-STA bufferbytes+2
-STA bufferbytes+3
 :
 \ TX REQUEST BLOCK LOOP
 :
@@ -432,19 +431,17 @@ BPL loop
 LDA fhandle
 STA buffer
 \ buffer to read bytes from file
-\ after OSGBPB param block af
+\ after OSGBPB param block at
 \ buffer+13 (which leaves space
 \ for request block, too)
 LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
-\ size = min(maxxfr,remain); use
-\ mindbl across buffer+5,9 as
-\ we don't need anything in +9
-LDA #maxxfr AND &FF
+\ size = min(readbytes,remain)
+LDA #readbytes AND &FF
 STA buffer+5
-LDA #maxxfr DIV &100
+LDA #readbytes DIV &100
 STA buffer+6
 \ zero top 2 bytes of 32-bit
 \ addrs
@@ -610,26 +607,62 @@ LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
 JSR mindbl \ => buffer+5
 :
-.buildblksnd
-\ copy offset from buffer+1 to
-\ buffer+9 (just before data
-\ read by OSGBPB at buffer+13)
-LDY #3
-.loop
-LDA buffer+1,Y
-STA buffer+9,Y
-DEY
-BPL loop
-:
-\ build tx cblock
-:
 \ copy buffer size to end addr
+\ (do this now as we will be
+\ updating this)
 LDY #3
 .loop
 LDA buffer+5,Y
 STA cblock+8,Y
 DEY
 BPL loop
+:
+\ update total bytes transferred
+\ (do this before we transmit as
+\ we're about to overwrite this
+\ part of the buffer with the
+\ packet header)
+\ total bytes so far to buffer+9
+LDY #3
+.loop
+LDA xfrbytes,Y
+STA buffer+9,Y
+DEY
+BPL loop
+\ add bytes just transferred to
+\ total
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR adcdblclc \ => buffer+9
+\ copy update total bytes back
+LDY #3
+.loop
+LDA buffer+9,Y
+STA xfrbytes,Y
+DEY
+BPL loop
+:
+\ update bytes left in buffer
+LDY #3
+.loop
+LDA bufferbytes,Y
+STA buffer+9,Y
+DEY
+BPL loop
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR sbcdblsec \ => buffer+5
+LDY #3
+.loop
+LDA buffer+5,Y
+STA bufferbytes,Y
+DEY
+BPL loop
+:
+\ TODO- update xfrremain
+:
+\ build tx cblock
+:
 \ add size of header (5 bytes)
 LDA #5
 STA cblock+4
@@ -655,9 +688,20 @@ LDX #(cblock+4) AND &FF
 LDY #(cblock+4) DIV &100
 JSR adcdblclc \ => cblock+8
 :
-\ store block type + dest
+\ store block type in buffer
 LDA #OP_BLKSND
 STA buffer+8
+\ store offset at buffer+9 (just
+\ before data read by OSGBPB at
+\ buffer+13); use buffer+1 as
+\ xfrbytes has been updated
+LDY #3
+.loop
+LDA buffer+1,Y
+STA buffer+9,Y
+DEY
+BPL loop
+:
 \ store dest port
 LDA #srv_port%
 STA cblock+1
@@ -671,27 +715,10 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 CPX #0
-BEQ updateremain
+BEQ shufflebuffer
 JMP neterror
 :
-.updateremain
-\ update bytes left in buffer
-LDY #3
-.loop
-LDA bufferbytes,Y
-STA buffer+9,Y
-DEY
-BPL loop
-LDX #(buffer+5) AND &FF
-LDY #(buffer+5) DIV &100
-JSR sbcdblsec \ => buffer+5
-LDY #3
-.loop
-LDA buffer+5,Y
-STA bufferbytes,Y
-DEY
-BPL loop
-:
+.shufflebuffer
 \ shuffle the untransmitted data
 \ in the buffer to the start
 \
@@ -741,6 +768,9 @@ DEY
 BPL loop
 :
 .nextblkreq
+LDA #ASC"@":JSR OSASCI:LDX #xfrbytes AND &FF:LDY #xfrbytes DIV &100:JSR wrdbl
+LDA #ASC"+":JSR OSASCI:LDA bufferbytes+1:JSR wrbyte:LDA bufferbytes:JSR wrbyte
+JSR OSNEWL
 JMP txblkloop
 :
 .okdone
