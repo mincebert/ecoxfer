@@ -16,7 +16,7 @@ OP_HDR=&01
 OP_BLKREQ=&81
 OP_BLKSND=&02
 :
-codebuf%=1600
+codebuf%=2000
 DIM code% codebuf%
 scratch=&70
 scratchsize=5
@@ -26,8 +26,8 @@ rxtimeout%=500
 :
 polldelay%=10
 polltimeout%=500
-buflen=300
-maxxfr%=256
+maxxfr=256
+buflen=maxxfr+13:REM +13 for OSGBPB param block
 srv_port%=100
 cli_port%=101
 DIM cblock 13,buffer buflen
@@ -97,10 +97,10 @@ UNTIL ?buffer=OP_BLKREQ
 PRINT ;~buffer!1;" ";
 IF buffer!1<>xfrbytes% THEN PRINT "Error - we're expecting &";~xfrbytes%:STOP
 :
-filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
+filebytes%=FNmin(maxxfr,len%-xfrbytes%)
 ?buffer=fh%
 buffer!1=buffer+13
-filebytes%=FNmin(maxxfr%,len%-xfrbytes%)
+filebytes%=FNmin(maxxfr,len%-xfrbytes%)
 buffer!5=filebytes%
 A%=4:REM read at curr pos
 X%=buffer MOD 256
@@ -149,11 +149,11 @@ REPEAT
 PRINT ;~xfrbytes%;" ";
 ?buffer=OP_BLKREQ
 buffer!1=xfrbytes%
-buffer!5=maxxfr%
+buffer!5=maxxfr
 result%=FNtx(station%,port%,buffer,9)
 IF result%<>0 THEN PRINT FNneterror(result%):STOP
 :
-bytes%=FNrx(station%,srv_port%,buffer+8,maxxfr%+5)
+bytes%=FNrx(station%,srv_port%,buffer+8,maxxfr+5)
 IF buffer?8<>OP_BLKSND THEN PRINT "Invalid block type received":STOP
 IF buffer!9<>xfrbytes% THEN PRINT "Incorrect position":STOP
 IF bytes%-5>len%-xfrbytes% THEN PRINT "Oversize block":STOP
@@ -206,6 +206,10 @@ P%=code%
 LDA scratch
 PHA
 LDA scratch+1
+PHA
+LDA scratch+2
+PHA
+LDA scratch+3
 PHA
 \ XY in scratch
 STX scratch
@@ -277,23 +281,25 @@ JMP loop
 LDA #ASC" "
 JSR OSASCI
 \ load addr
+LDA #1
 LDX #(buffer+2) AND &FF
 LDY #(buffer+2) DIV &100
-JSR wrdouble
+JSR wrdbl0
 \ space
 LDA #ASC" "
 JSR OSASCI
 \ exec addr
+LDA #1
 LDX #(buffer+6) AND &FF
 LDY #(buffer+6) DIV &100
-JSR wrdouble
+JSR wrdbl0
 \ space
 LDA #ASC" "
 JSR OSASCI
 \ len
 LDX #(buffer+10) AND &FF
 LDY #(buffer+10) DIV &100
-JSR wrdouble
+JSR wrdbl
 JSR OSNEWL
 :
 \ BUILD + SEND FILE HEADER
@@ -391,44 +397,62 @@ EQUS "File open error"
 EQUB 0
 :
 .openinok
-\ initialise 'bytes so far'
+\ initialise 'bytes so far' and
+\ buffer in use
 LDA #0
 STA xfrbytes
 STA xfrbytes+1
 STA xfrbytes+2
 STA xfrbytes+3
+STA bufferbytes
+STA bufferbytes+1
+STA bufferbytes+2
+STA bufferbytes+3
 :
 \ TX REQUEST BLOCK LOOP
 :
 .txblkloop
 :
-\ TODO- handle if we didn't xfer
-\ all of buffer last time, just
-\ shuffle along what's left
+\ check if any bytes left in the
+\ buffer - if there are, we just
+\ use those
+LDY #3
+.loop
+LDA bufferbytes,Y
+BNE getblkreq
+DEY
+BPL loop
+:
+.readbytes
+\ buffer empty so read in
+\ another block of maxxfr bytes
 :
 \ build OSGBPB block
 :
 LDA fhandle
 STA buffer
 \ buffer to read bytes from file
-\ after OSGBPB param block
-\ (which leaves space for
-\ request block, too)
+\ after OSGBPB param block af
+\ buffer+13 (which leaves space
+\ for request block, too)
 LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
+\ size = min(maxxfr,remain); use
+\ mindbl across buffer+5,9 as
+\ we don't need anything in +9
+LDA #maxxfr AND &FF
+STA buffer+5
+LDA #maxxfr DIV &100
+STA buffer+6
+\ zero top 2 bytes of 32-bit
+\ addrs
 LDA #0
 STA buffer+3
 STA buffer+4
-\ size = min(256,remain); use
-\ mind across buffer+5,9 since
-\ we don't need anything in +9
-STA buffer+5
 STA buffer+7
 STA buffer+8
-LDA #1
-STA buffer+6
 LDY #3
 .loop
 LDA xfrremain,Y
@@ -437,13 +461,23 @@ DEY
 BPL loop
 LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
-JSR mindbl \ min in buffer+5
+JSR mindbl \ => buffer+5
+\ store bytes read in
+\ bufferbytes; if it turns out
+\ we didn't manage to read them,
+\ we're aborting anyway
+LDY #3
+.loop
+LDA buffer+5,Y
+STA bufferbytes,Y
+DEY
+BPL loop
 :
 LDA #4 \ =read at current pos
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSGBPB
-BCC storebytesread
+BCC getblkreq
 :
 \ error reading file - tidy up
 \ and abort
@@ -453,15 +487,15 @@ EQUB 189 \ =Access violation
 EQUS "File read error"
 EQUB 0
 :
-.storebytesread
+.getblkreq
 \ print next byte expected to tx
+\ and in the blkreq
 LDA #13 \ CR but not LF
 JSR OSWRCH
 LDX #xfrbytes AND &FF
 LDY #xfrbytes DIV &100
-JSR wrdouble
+JSR wrdbl
 :
-\ TODO- how many bytes xferred?
 .waitblkreq
 \ set up rx cblock
 LDA #cli_port%
@@ -476,7 +510,8 @@ LDA #buffer AND &FF
 STA cblock+5
 LDA #buffer DIV &100
 STA cblock+6
-\ set end addr
+\ set end addr - blkreq is
+\ always 9 bytes
 LDA #(buffer+9) AND &FF
 STA cblock+9
 LDA #(buffer+9) DIV &100
@@ -506,7 +541,7 @@ CMP #OP_BLKREQ
 BEQ blkreqok
 JSR abortsend
 BRK
-EQUB 100 \ TODO
+EQUB &44 \ =bad TX block
 EQUS "Expected block request"
 EQUB 0
 :
@@ -514,7 +549,7 @@ EQUB 0
 \ end-start=bytes received
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR sbcdbl
+JSR sbcdblsec \ => cblock+5
 \ confirm bytes=9
 LDA #9
 STA cblock+9
@@ -525,32 +560,23 @@ STA cblock+12
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR cmpdbl
-BEQ chkmaxxfr
+BEQ copymaxxfr
 JSR abortsend
 BRK
 EQUB 20 \ =Too big
 EQUS "Block request size"
 EQUB 0
 :
-.chkmaxxfr
-\ check maxxfr is 256 or less
-LDA #0
-STA buffer+9
-STA buffer+11
-STA buffer+12
-LDA #1
-STA buffer+10
-LDX #(buffer+5) AND &FF
-LDY #(buffer+5) DIV &100
-JSR cmpdbl
-BEQ chkoffset \ TODO- make BPL and handle smaller xfers
-JSR abortsend
-BRK
-EQUB 20 \ =Too big
-EQUS "Block request maxxfr"
-EQUB 0
+.copymaxxfr
+\ copy maxxfr to buffer+9 to
+\ make space to check offset
+LDY #3
+.loop
+LDA buffer+5,Y
+STA buffer+9,Y
+DEY
+BPL loop
 :
-.chkoffset
 \ copy expected offset into
 \ buffer and compare with recv'd
 LDY #3
@@ -562,41 +588,160 @@ BPL loop
 LDX #(buffer+1) AND &FF
 LDY #(buffer+1) DIV &100
 JSR cmpdbl
-BEQ okdone
+BEQ calcxfr
 JSR abortsend
 BRK
 EQUB 100 \ TODO
 EQUS "Block request offset"
 EQUB 0
 :
-.buildblksnd
-\ copy offset from buffer+5 to
-\ buffer+9 (just before data
-\ read by OSGBPB)
+.calcxfr
+\ bytes to transfer is
+\ min(bufferbytes,maxxfr);
+\ maxxfr copies to buffer+9,
+\ above
 LDY #3
 .loop
-LDA buffer+5,Y
+LDA bufferbytes,Y
+STA buffer+5,Y
+DEY
+BPL loop
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR mindbl \ => buffer+5
+:
+.buildblksnd
+\ copy offset from buffer+1 to
+\ buffer+9 (just before data
+\ read by OSGBPB at buffer+13)
+LDY #3
+.loop
+LDA buffer+1,Y
 STA buffer+9,Y
 DEY
 BPL loop
-\ store block type
-LDA #OP_BLKSND
-STA buffer+8
+:
 \ build tx cblock
-LDA peeraddr
-STA cblock+1
-LDA peeraddr+1
-STA cblock+2
+:
+\ copy buffer size to end addr
+LDY #3
+.loop
+LDA buffer+5,Y
+STA cblock+8,Y
+DEY
+BPL loop
+\ add size of header (5 bytes)
+LDA #5
+STA cblock+4
+LDA #0
+STA cblock+5
+STA cblock+6
+STA cblock+7
+LDX #(cblock+4) AND &FF
+LDY #(cblock+4) DIV &100
+JSR adcdblclc \ => cblock+8
+:
+\ buffer start address
 LDA #(buffer+8) AND &FF
 STA cblock+4
 LDA #(buffer+8) DIV &100
 STA cblock+5
-CLC
-LDA #(buffer+8) AND &FF
-ADC #1 \ ???? TODO
 LDA #0
 STA cblock+6
 STA cblock+7
+:
+\ add to size+5 to get end addr
+LDX #(cblock+4) AND &FF
+LDY #(cblock+4) DIV &100
+JSR adcdblclc \ => cblock+8
+:
+\ store block type + dest
+LDA #OP_BLKSND
+STA buffer+8
+\ store dest port
+LDA #srv_port%
+STA cblock+1
+\ copy dest addr
+LDA peeraddr
+STA cblock+2
+LDA peeraddr+1
+STA cblock+3
+:
+LDX #cblock AND &FF
+LDY #cblock DIV &100
+JSR tx
+CPX #0
+BEQ updateremain
+JMP neterror
+:
+.updateremain
+\ update bytes left in buffer
+LDY #3
+.loop
+LDA bufferbytes,Y
+STA buffer+9,Y
+DEY
+BPL loop
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR sbcdblsec \ => buffer+5
+LDY #3
+.loop
+LDA buffer+5,Y
+STA bufferbytes,Y
+DEY
+BPL loop
+:
+\ shuffle the untransmitted data
+\ in the buffer to the start
+\
+\ we know the addrs here are
+\ 16-bit so only use 2 bytes
+:
+\ calculate the buffer src addr
+\ into scratch+0/1
+CLC
+LDA #(buffer+13) AND &FF
+ADC buffer+5
+STA scratch
+LDA #(buffer+13) DIV &100
+ADC buffer+6
+STA scratch+1
+:
+\ set the buffer dst addr in
+\ scratch+2/3
+LDA #(buffer+13) AND &FF
+STA scratch+2
+LDA #(buffer+13) DIV &100
+STA scratch+3
+:
+\ move the blocks of 256 bytes
+\ (scratch+0/1)->(scratch+2/3)
+LDX buffer+6
+BEQ bufmove1
+LDY #0
+.loop
+LDA (scratch),Y
+STA (scratch+2),Y
+INY
+BNE loop
+INC scratch+1
+INC scratch+3
+DEX
+BNE loop
+:
+.bufmove1
+LDY buffer+5
+BEQ nextblkreq
+DEY
+.loop
+LDA (scratch),Y
+STA (scratch+2),Y
+DEY
+BPL loop
+:
+.nextblkreq
+JMP txblkloop
 :
 .okdone
 JSR OSASCI
@@ -666,10 +811,10 @@ EQUS "Bad control block"
 EQUB 0
 :
 .scratchrestore
-\ restore scratch bytes assuming
+\ Restore scratch bytes assuming
 \ they're at the top of the
 \ stack, underneath the return
-\ address added by a JSR
+\ address added by a JSR.
 \ Entry - stack as above
 \ Exit  - AXY undefined
 \ pop my return addr to YX
@@ -678,6 +823,10 @@ TAY
 PLA
 TAX
 \ restore scratch
+PLA
+STA scratch+3
+PLA
+STA scratch+2
 PLA
 STA scratch+1
 PLA
@@ -830,37 +979,35 @@ RTS
 \ Get interval timer into
 \ buffer.
 \ Exit  - AXY undefined
-LDA #3 \ read interval timer
-LDX #now MOD 256
-LDY #now DIV 256
-JMP OSWORD
-\ RTS back to caller
+LDA #3 \ =read interval timer
+LDX #now AND &FF
+LDY #now DIV &100
+JMP OSWORD \ JMP>RTS
 :
 .set_timeout
-\ Entry - length of time in
-\         timeout buffer
-\ Exit  _ time buffer updated to
-\         current time; timeout
-\         buffer added to
-\         current time
+\ Set timeout to now + length of
+\ timeout in timeout buffer.
+\ Entry - timeout len in timeout
+\         buffer
+\ Exit  _ now buffer overwritten
+\         and timeout buffer
+\         updated to timeout len
+\         + current time
 \         AXY undefined
 JSR get_time
 CLC
-LDA now
-ADC timeout
-STA timeout
-LDA now+1
-ADC timeout+1
-STA timeout+1
-LDA now+2
-ADC timeout+2
-STA timeout+2
-LDA now+3
-ADC timeout+3
-STA timeout+3
-LDA now+4
-ADC timeout+4
-STA timeout+4
+LDY #0
+PHP
+.loop
+PLP
+LDA now,Y
+ADC timeout,Y
+STA timeout,Y
+PHP
+INY
+CPY #5
+BNE loop
+PLP
 RTS
 :
 .chk_timeout
@@ -869,34 +1016,68 @@ RTS
 \ Exit - C=timeout reached
 \        AXY undefined
 JSR get_time
-LDA now+4
-CMP timeout+4
+LDY #4
+.loop
+LDA now,Y
+CMP timeout,Y
+\ if not same, stop here - C
+\ will indicate if reached
 BNE timeout_checked
-LDA now+3
-CMP timeout+3
-BNE timeout_checked
-LDA now+2
-CMP timeout+2
-BNE timeout_checked
-LDA now+1
-CMP timeout+1
-BNE timeout_checked
-LDA now
-CMP timeout
+DEY
+BPL loop
 .timeout_checked
 RTS
 :
-.sbcdbl
-\ subtract 32-bit doubles Q-P,
-\ Entry - YX=addr of block
+.adcdblclc
+\ as adcdbl but sets C=0
+CLC
+.adcdbl
+\ add 32-bit doubles Q=Q+P
+\ Entry - YX=addr of block,C
 \   block +0-3=P,+4-7=Q
 \ Exit  -
-\   AXY=undefined, CZN=as SBC
-\   block +0-3=(Q-P)
+\   AXY=undefined,CZN=as ADC
+\   block +4-7=Q+P
 \   overwrites scratch
 STX scratch
 STY scratch+1
+LDY #4
+.loop
+LDA (scratch),Y get byte in Q
+DEY \ move to same byte in P
+DEY
+DEY
+DEY
+ADC (scratch),Y
+PHP
+INY \ back to same byte in Q
+INY
+INY
+INY
+STA (scratch),Y
+CPY #7 \ finished
+BEQ adcdbldone
+INY \ move to next byte in Q
+PLP
+JMP loop
+.adcdbldone
+PLP
+RTS
+:
+.sbcdblsec
+\ as sbcdbl but sets C=1 (= no
+\ borrow)
 SEC
+.sbcdbl
+\ subtract 32-bit doubles P=Q-P
+\ Entry - YX=addr of block,C
+\   block +0-3=P,+4-7=Q
+\ Exit  -
+\   AXY=undefined,CZN=as SBC
+\   block +0-3=Q-P
+\   overwrites scratch
+STX scratch
+STY scratch+1
 LDY #4
 .loop
 LDA (scratch),Y \ get byte in Q
@@ -958,20 +1139,19 @@ RTS
 \   overwrites scratch
 JSR cmpdbl
 BCS mindbldone
-LDY #3
+LDY #7
 .loop
-INY
-INY
-INY
-INY
 LDA (scratch),Y
-DEY
+DEY \ move to same byte in P
 DEY
 DEY
 DEY
 STA (scratch),Y
-DEY
-BPL loop
+BEQ mindbldone
+INY
+INY
+INY
+BNE loop \ Z<>0 => BRA
 .mindbldone
 RTS
 :
@@ -1000,18 +1180,11 @@ EQUD 0
 \ remaining bytes to transfer
 EQUD 0
 :
-.bufferuse
+.bufferbytes
 \ bytes of data in buffer
-EQUD 0
-:
-.cmpdblbuff
-\ temporary buffer for cmpdbl
-\ doubles for comparisons, etc.
-\ TODO- do we need this?
-.cmpdblbuff1
-EQUD 0
-.cmpdblbuff2
-EQUD 0
+\ (typically starting at
+\ buffer+13)
+EQUW 0
 :
 .now
 \ get_time fetches timer to here
@@ -1021,7 +1194,7 @@ EQUB 0
 EQUB 0
 EQUB 0
 .timeout
-\ expiry of timeout
+\ expiry of timeout stored here
 EQUB 0
 EQUB 0
 EQUB 0
@@ -1030,26 +1203,31 @@ EQUB 0
 :
 \ GENERAL ROUTINES
 :
-.wrdouble
+.wrdbl
+\ as wrdbl0 but sets A=0
+LDA #0
+.wrdbl0
 \ write 32-bit double in hex
-\ Entry - YX=addr of double
+\ Entry -
+\   YX=addr of double
+\   A=0/1 strip/print leading 0s
 \ Exit  - AXY=undefined
 \   overwrites scratch
 STX scratch
 STY scratch+1
-LDX #0 \ in leading zeros flag
+TAX \ in leading 0s flag
 LDY #3 \ byte #; start at MSB
 .loop
 LDA (scratch),Y
-BNE wrdoublehex \ <>0 - write
+BNE wrdblhex \ <>0 - write
 CPX #0 \ leading zeroes?
-BNE wrdoublehex \ no - write
+BNE wrdblhex \ no - write
 CPY #0 \ last digit?
-BNE skipwrdoublehex \ no - skip
-.wrdoublehex
+BNE skipwrdblhex \ no - skip
+.wrdblhex
 JSR wrbyte
 INX \ set not in leading zeros
-.skipwrdoublehex
+.skipwrdblhex
 DEY \ move to next byte MSB->LSB
 BPL loop
 RTS
