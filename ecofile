@@ -401,11 +401,11 @@ EQUB 0
 \ initialise 'bytes so far' and
 \ buffer in use
 LDA #0
-STA xfrbytes
+STA xfrbytes \ double
 STA xfrbytes+1
 STA xfrbytes+2
 STA xfrbytes+3
-STA bufferbytes
+STA bufferbytes \ word
 STA bufferbytes+1
 :
 \ TX REQUEST BLOCK LOOP
@@ -538,7 +538,7 @@ CMP #OP_BLKREQ
 BEQ blkreqok
 JSR abortsend
 BRK
-EQUB &44 \ =bad TX block
+EQUB 217 \ =CFS Header
 EQUS "Expected block request"
 EQUB 0
 :
@@ -557,20 +557,34 @@ STA cblock+12
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR cmpdbl
-BEQ copymaxxfr
+BEQ calcxfr
 JSR abortsend
 BRK
 EQUB 20 \ =Too big
 EQUS "Block request size"
 EQUB 0
 :
-.copymaxxfr
-\ copy maxxfr to buffer+9 to
-\ make space to check offset
+.calcxfr
+\ bytes to transfer is
+\ min(bufferbytes,maxxfr);
+\ maxxfr copied to buffer+9,
+\ above
+LDA bufferbytes
+STA buffer+9
+LDA bufferbytes+1
+STA buffer+10
+LDA #0 \ pad bufferbytes word
+STA buffer+11
+STA buffer+12
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR mindbl \ => buffer+5
+\ copy buffer size to end addr
+\ (we will add start addr later)
 LDY #3
 .loop
 LDA buffer+5,Y
-STA buffer+9,Y
+STA cblock+8,Y
 DEY
 BPL loop
 :
@@ -588,34 +602,9 @@ JSR cmpdbl
 BEQ calcxfr
 JSR abortsend
 BRK
-EQUB 100 \ TODO
-EQUS "Block request offset"
+EQUB 218 \ =CFS Block
+EQUS "Block offset"
 EQUB 0
-:
-.calcxfr
-\ bytes to transfer is
-\ min(bufferbytes,maxxfr);
-\ maxxfr copies to buffer+9,
-\ above
-LDY #3
-.loop
-LDA bufferbytes,Y
-STA buffer+5,Y
-DEY
-BPL loop
-LDX #(buffer+5) AND &FF
-LDY #(buffer+5) DIV &100
-JSR mindbl \ => buffer+5
-:
-\ copy buffer size to end addr
-\ (do this now as we will be
-\ updating this)
-LDY #3
-.loop
-LDA buffer+5,Y
-STA cblock+8,Y
-DEY
-BPL loop
 :
 \ update total bytes transferred
 \ (do this before we transmit as
@@ -741,6 +730,7 @@ LDA #(buffer+13) AND &FF
 STA scratch+2
 LDA #(buffer+13) DIV &100
 STA scratch+3
+LDA #ASC"f":JSR OSASCI:LDX #scratch AND &FF:LDY #scratch DIV &100:JSR wrdbl0
 :
 \ move the blocks of 256 bytes
 \ (scratch+0/1)->(scratch+2/3)
@@ -758,6 +748,7 @@ DEX
 BNE loop
 :
 .bufmove1
+LDA #ASC"o":JSR OSASCI
 LDY buffer+5
 BEQ nextblkreq
 DEY
