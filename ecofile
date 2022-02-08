@@ -777,15 +777,18 @@ JMP neterror
 \ skip this if we transferred
 \ the entire buffer and no
 \ shuffling required
-LDA buffused
-BNE shufflebuff
 LDA buffused+1
-BEQ jmpxfrloop
+BNE shufflebuff256
+LDA buffused
+BNE shufflebuff256
+.jmpxfrloop
+JMP xfrloop
 :
-.shufflebuff
+.shufflebuff256
 \ calculate the buffer src addr
 \ (start after header + bytes
 \ transferred) into scratch+0/1
+LDA #ASC":":JSR OSASCI
 CLC
 LDA #(buffer+13) AND &FF
 ADC buffer+5
@@ -802,10 +805,15 @@ STA scratch+2
 LDA #(buffer+13) DIV &100
 STA scratch+3
 :
+LDA scratch+1:JSR wrbyte:LDA scratch:JSR wrbyte
+LDA #ASC">":JSR OSASCI
+LDA scratch+3:JSR wrbyte:LDA scratch+2:JSR wrbyte
+JSR OSNEWL
+:
 \ move the blocks of 256 bytes
 \ (scratch+0/1)->(scratch+2/3)
 LDX buffer+6
-BEQ bufmove1
+BEQ shufflebuff1
 LDY #0
 .loop
 LDA (scratch),Y
@@ -817,17 +825,19 @@ INC scratch+3
 DEX
 BNE loop
 :
-.bufmove1
-LDY buffer+5
-BEQ jmpxfrloop
-DEY
+.shufflebuff1
+\ check there is still <256 to
+\ move
+LDX buffer+5
+BEQ jmpxfrloop \ no
+LDA #ASC"&":JSR OSASCI
+LDY #0
 .loop
 LDA (scratch),Y
 STA (scratch+2),Y
-DEY
-BPL loop
-:
-.jmpxfrloop
+INY
+DEX
+BNE loop
 JMP xfrloop
 :
 .cleanup
@@ -1310,7 +1320,8 @@ LDA #0
 \   A=0/1 strip/print leading 0s
 \ Exit -
 \   AXY undefined,
-\   Overwrites scratch.
+\   Overwrites scratch
+:
 STX scratch
 STY scratch+1
 TAX \ in leading 0s flag
