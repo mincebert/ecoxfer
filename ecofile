@@ -224,19 +224,23 @@ STA peer
 INY
 LDA (scratch),Y
 STA peer+1
-\ store filename addr
+\ store filename addr and in
+\ start of buffer for OSGBPB,
+\ below
 INY
 LDA (scratch),Y
 STA fnameaddr
+STA buffer
 INY
 LDA (scratch),Y
 STA fnameaddr+1
+STA buffer+1
 :
 \ GET FILE INFORMATION
 :
 LDA #5 \ =read info for file
-LDX #fnameaddr AND &FF
-LDY #fnameaddr DIV &100
+LDX #buffer AND &FF
+LDY #buffer DIV &100
 JSR OSFILE
 CMP #1 \ =file found
 BEQ savefilelen
@@ -633,7 +637,7 @@ BPL loop
 LDX #(buffer+1) AND &FF
 LDY #(buffer+1) DIV &100
 JSR cmpdbl
-BEQ calcxfr \ =same
+BEQ updcurrpos \ =same
 \ offset mismatch
 JSR abortsend
 BRK
@@ -641,6 +645,7 @@ EQUB 218 \ =CFS Block
 EQUS "Block offset"
 EQUB 0
 :
+.updcurrpos
 \ calculate new currpos
 \ (buffer+5 = currpos)
 \ bytes to be transferred to
@@ -737,8 +742,8 @@ STA cblock+3
 LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
-CPX #0
-BEQ shufflechk
+TXA
+BEQ shufflechk \ X=1-success
 JMP neterror
 :
 .shufflechk
@@ -751,12 +756,12 @@ JMP neterror
 \ skip this if we transferred
 \ the entire buffer and no
 \ shuffling required
-LDA buffer+5
+LDA buffused
 BNE shufflebuff
-LDA buffer+6
+LDA buffused+1
 BEQ chkdone
 :
-.shufflebuf
+.shufflebuff
 \ calculate the buffer src addr
 \ (start after header + bytes
 \ transferred) into scratch+0/1
@@ -776,9 +781,6 @@ STA scratch+2
 LDA #(buffer+13) DIV &100
 STA scratch+3
 :
-\ DEBUG- print src+dst
-LDA #ASC"f":JSR OSASCI:LDX #scratch AND &FF:LDY #scratch DIV &100:JSR wrdbl0
-:
 \ move the blocks of 256 bytes
 \ (scratch+0/1)->(scratch+2/3)
 LDX buffer+6
@@ -795,7 +797,6 @@ DEX
 BNE loop
 :
 .bufmove1
-LDA #ASC"o":JSR OSASCI
 LDY buffer+5
 BEQ chkdone
 DEY
@@ -806,24 +807,17 @@ DEY
 BPL loop
 :
 .chkdone
-LDA #ASC"@":JSR OSASCI:LDX #currpos AND &FF:LDY #currpos DIV &100:JSR wrdbl
-LDA #ASC"+":JSR OSASCI:LDA buffused+1:JSR wrbyte:LDA buffused:JSR wrbyte
-JSR OSNEWL
-:
 \ check if there is anything
 \ left to transfer
 LDY #3
 .loop
 LDA remain,Y
-BNE nextxfr
+BNE nextxfr \ <>0=more
 DEY
 BPL loop
-JMP xfrdone
 :
-.nextxfr
-JMP xfrloop
+\ DONE
 :
-.okdone
 \ close the file
 JSR abortsend
 LDY #0
@@ -835,8 +829,11 @@ CMP #13
 BNE loop
 RTS
 .okmsg
-EQUS "Done?"
+EQUS "Done"
 EQUB 13
+:
+.nextxfr
+JMP xfrloop
 :
 .abortsend
 LDA #0 \ =close
