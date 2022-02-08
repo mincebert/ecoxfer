@@ -39,7 +39,7 @@ PROCassemble
 :
 REM test send routine
 $F="T1"
-!S=11
+!S=81
 S!2=F
 X%=S
 Y%=S DIV 256
@@ -313,10 +313,6 @@ LDA #OP_FILEINFO
 STA buffer
 LDA #cli_port%
 STA buffer+1
-LDA peer
-STA buffer+2
-LDA peer+1
-STA buffer+3
 :
 \ copy filename into buffer for
 \ transmission
@@ -483,7 +479,7 @@ LDY #buffer DIV &100
 JSR OSGBPB
 BCC getblkreq \ =success
 \ error reading file
-JMP abortsend
+JMP cleanup
 BRK
 EQUB 189 \ =Access violation
 EQUS "File read error"
@@ -500,6 +496,31 @@ JSR OSWRCH \ CR but not LF
 LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
+:
+\ check if there is anything
+\ left to transfer
+LDY #3
+.loop
+LDA remain,Y
+BNE waitblkreq \ <>0=more
+DEY
+BPL loop
+:
+\ finished transfer
+:
+\ close the file
+JSR cleanup
+LDY #0
+.loop
+LDA okmsg,Y
+INY
+JSR OSASCI
+CMP #13
+BNE loop
+RTS
+.okmsg
+EQUS "Done"
+EQUB 13
 :
 .waitblkreq
 \ set up rx cblock
@@ -535,7 +556,7 @@ JSR rx
 TXA
 BMI chkblkreq \ X[7]=success
 \ no block request received
-JSR abortsend
+JSR cleanup
 BRK
 EQUB &42 \ =no scout
 EQUS "Block request timeout"
@@ -547,7 +568,7 @@ LDA buffer
 CMP #OP_BLKREQ
 BEQ blkreqok
 \ incorrect packet operation
-JSR abortsend
+JSR cleanup
 BRK
 EQUB 217 \ =CFS Header
 EQUS "Expected block request"
@@ -570,7 +591,7 @@ LDY #(cblock+5) DIV &100
 JSR cmpdbl
 BEQ calcxfr
 \ size<>9
-JSR abortsend
+JSR cleanup
 BRK
 EQUB 20 \ =Too big
 EQUS "Block request size"
@@ -639,7 +660,7 @@ LDY #(buffer+1) DIV &100
 JSR cmpdbl
 BEQ updcurrpos \ =same
 \ offset mismatch
-JSR abortsend
+JSR cleanup
 BRK
 EQUB 218 \ =CFS Block
 EQUS "Block offset"
@@ -759,7 +780,7 @@ JMP neterror
 LDA buffused
 BNE shufflebuff
 LDA buffused+1
-BEQ chkdone
+BEQ jmpxfrloop
 :
 .shufflebuff
 \ calculate the buffer src addr
@@ -798,7 +819,7 @@ BNE loop
 :
 .bufmove1
 LDY buffer+5
-BEQ chkdone
+BEQ jmpxfrloop
 DEY
 .loop
 LDA (scratch),Y
@@ -806,36 +827,10 @@ STA (scratch+2),Y
 DEY
 BPL loop
 :
-.chkdone
-\ check if there is anything
-\ left to transfer
-LDY #3
-.loop
-LDA remain,Y
-BNE nextxfr \ <>0=more
-DEY
-BPL loop
-:
-\ DONE
-:
-\ close the file
-JSR abortsend
-LDY #0
-.loop
-LDA okmsg,Y
-INY
-JSR OSASCI
-CMP #13
-BNE loop
-RTS
-.okmsg
-EQUS "Done"
-EQUB 13
-:
-.nextxfr
+.jmpxfrloop
 JMP xfrloop
 :
-.abortsend
+.cleanup
 LDA #0 \ =close
 LDY fhandle
 JSR OSFIND
