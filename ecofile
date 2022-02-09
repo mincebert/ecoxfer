@@ -26,7 +26,7 @@ rxtimeout%=500
 :
 polldelay%=10
 polltimeout%=500
-maxxfr=256:REM in single packet
+maxxfr=20:REM in single packet
 readbytes=maxxfr:REM bytes read by OSGBPB must be >=maxxfr
 buflen=readbytes+13:REM +13 for OSGBPB param block
 srv_port%=100
@@ -805,14 +805,9 @@ STA scratch+2
 LDA #(buffer+13) DIV &100
 STA scratch+3
 :
-LDA scratch+1:JSR wrbyte:LDA scratch:JSR wrbyte
-LDA #ASC">":JSR OSASCI
-LDA scratch+3:JSR wrbyte:LDA scratch+2:JSR wrbyte
-JSR OSNEWL
-:
 \ move the blocks of 256 bytes
 \ (scratch+0/1)->(scratch+2/3)
-LDX buffer+6
+LDX buffused+1
 BEQ shufflebuff1
 LDY #0
 .loop
@@ -828,9 +823,8 @@ BNE loop
 .shufflebuff1
 \ check there is still <256 to
 \ move
-LDX buffer+5
+LDX buffused
 BEQ jmpxfrloop \ no
-LDA #ASC"&":JSR OSASCI
 LDY #0
 .loop
 LDA (scratch),Y
