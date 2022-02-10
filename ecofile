@@ -16,7 +16,7 @@ OP_FILEINFO=&01
 OP_BLKREQ=&81
 OP_BLKSND=&02
 :
-codebuf%=2000
+codebuf%=3000
 DIM code% codebuf%
 scratch=&70
 scratchsize=5
@@ -37,14 +37,14 @@ DIM F 100,S 20
 :
 PROCassemble
 :
-REM test send routine
-$F="$.DEV*.ECO*.T1"
+REM test routine
+$F="T3"
 !S=81
 S!2=F
 X%=S
 Y%=S DIV 256
-PRINT "Sending..."
-PRINT ~USR(send)
+PRINT "Receiving..."
+PRINT ~USR(receive)
 END
 :
 REPEAT
@@ -294,47 +294,22 @@ LDA (scratch),Y
 STA buffer+18,X
 INX
 CMP #13 \ =CR
-BEQ printfilenums
+BEQ printtxmeta
 JSR OSASCI
 INY
 CPX #10 \ limit to 10 chars
-BMI loop
+BCC loop
 :
 .truncleafname
 LDA #13 \ =CR
 STA buffer+18,X
 :
-.printfilenums
+.printtxmeta
 \ store len on stack
 TXA
 PHA
-:
-\ print load, execute, len
-:
-\ space
-LDA #ASC" "
-JSR OSASCI
-\ load addr
-LDA #1
-LDX #(buffer+2) AND &FF
-LDY #(buffer+2) DIV &100
-JSR wrdbl0 \ leading 0s
-\ space
-LDA #ASC" "
-JSR OSASCI
-\ exec addr
-LDA #1
-LDX #(buffer+6) AND &FF
-LDY #(buffer+6) DIV &100
-JSR wrdbl0 \ leading 0s
-\ space
-LDA #ASC" "
-JSR OSASCI
-\ len
-LDX #(buffer+10) AND &FF
-LDY #(buffer+10) DIV &100
-JSR wrdbl \ no leading 0s
-JSR OSNEWL
+\ print attributes
+JSR printmeta
 :
 \ BUILD + SEND FILE HEADER
 :
@@ -796,9 +771,8 @@ JMP neterror
 \ skip this if we transferred
 \ the entire buffer and no
 \ shuffling required
-LDA buffused+1
-BNE shufflebuff256
 LDA buffused
+ORA buffused+1
 BNE shufflebuff256
 .jmpxfrloop
 JMP xfrloop
@@ -852,6 +826,193 @@ INY
 DEX
 BNE loop
 JMP xfrloop
+:
+\ RECEIVE
+:
+.receive
+\ Entry-
+\   YX=sendblk addr,
+\   sendblk
+\     +0=dest stn (0.0=any),
+\     +2=filename addr (0=sent)
+\ Exit - AXY=undefined
+:
+\ SETUP AND GET PARAMS
+:
+\ save scratch
+LDA scratch
+PHA
+LDA scratch+1
+PHA
+LDA scratch+2
+PHA
+LDA scratch+3
+PHA
+\ XY in scratch
+STX scratch
+STY scratch+1
+:
+\ store peer address
+LDY #0
+LDA (scratch),Y
+STA peer
+INY
+LDA (scratch),Y
+STA peer+1
+\ store filename addr and in
+\ start of buffer for OSGBPB,
+\ below
+INY
+LDA (scratch),Y
+STA fnameaddr
+INY
+LDA (scratch),Y
+STA fnameaddr+1
+:
+\ build RX cblock
+:
+LDA #srv_port%
+STA cblock+2
+LDA peer
+STA cblock+3
+LDA peer+1
+STA cblock+4
+\ buffer start
+LDA #buffer AND &FF
+STA cblock+5
+LDA #buffer DIV &100
+STA cblock+6
+\ buffer end - max is 29 (18
+\ op/port/load/exec/len/attr +
+\ 10 filename + CR)
+LDA #(buffer+29) AND &FF
+STA cblock+9
+LDA #(buffer+29) DIV &100
+STA cblock+10
+\ zero pad top half of words
+LDA #0
+STA cblock+7
+STA cblock+8
+STA cblock+11
+STA cblock+12
+LDX #cblock AND &FF
+LDY #cblock DIV &100
+JSR rx
+TXA
+BMI headerrcvd
+BRK
+EQUB &42
+EQUS "Timeout"
+EQUB 0
+:
+.headerrcvd
+\ TODO- check type
+LDA buffer
+\ CMP #OPENIN..
+:
+\ save peer details
+LDA buffer+1
+STA port
+LDA cblock+3
+STA peer
+LDA cblock+4
+STA peer+1
+:
+\ received file to create (may
+\ be overridden later)
+LDA #(buffer+18) AND &FF
+STA buffer
+LDA #(buffer+18) DIV &100
+STA buffer+1
+:
+LDY #0
+.loop
+LDA buffer+18,Y
+CMP #13
+BEQ headerdone
+CMP #32
+BCC invalidrecvname
+CMP #127
+BCS invalidrecvname
+JSR OSASCI
+INY
+CPY #10
+BCC loop
+.invalidrecvname
+BRK
+EQUB 219 \ =CFS File?
+EQUS "Invalid name"
+EQUB 0
+:
+.headerdone
+LDA #ASC"@"
+JSR OSASCI
+LDA peer+1
+BEQ skipnet
+JSR wrdec
+LDA #ASC"."
+JSR OSASCI
+.skipnet
+LDA peer
+JSR wrdec
+:
+LDA fnameaddr
+ORA fnameaddr+1
+BEQ recvnamedone
+LDA #ASC"-"
+JSR OSASCI
+LDA #ASC">"
+JSR OSASCI
+LDA fnameaddr
+STA scratch
+STA buffer \ for OSFILE
+LDA fnameaddr+1
+STA scratch+1
+STA buffer+1
+LDY #0
+.loop
+LDA (scratch),Y
+CMP #13
+BEQ recvnamedone
+JSR OSASCI
+INY
+JMP loop
+:
+.recvnamedone
+JSR printmeta
+JSR OSNEWL
+:
+\ save length of file
+LDY #3
+.loop
+LDA buffer+10,Y
+STA remain
+DEY
+BPL loop
+:
+\ start+end addrs = 0
+LDA #0
+LDY #7
+.loop
+STA buffer+10,Y
+DEY
+BPL loop
+:
+\ create file
+LDA scratch
+STA buffer
+LDA scratch+1
+STA buffer+1
+:
+LDA #0 \ =save
+LDX #buffer AND &FF
+LDY #buffer DIV &100
+JSR OSFILE
+:
+JSR scratchrestore
+RTS
+:
+\ UTILITY ROUTINES
 :
 .cleanup
 LDA #0 \ =close
@@ -933,6 +1094,156 @@ TXA
 PHA
 TYA
 PHA
+RTS
+:
+.printmeta
+\ Print file metadata - header
+\ is assumed to be in the
+\ buffer.
+:
+\ print load, execute, len
+:
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ load addr
+LDA #1
+LDX #(buffer+2) AND &FF
+LDY #(buffer+2) DIV &100
+JSR wrdbl0 \ leading 0s
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ exec addr
+LDA #1
+LDX #(buffer+6) AND &FF
+LDY #(buffer+6) DIV &100
+JSR wrdbl0 \ leading 0s
+\ space
+LDA #ASC" "
+JSR OSASCI
+\ len
+LDX #(buffer+10) AND &FF
+LDY #(buffer+10) DIV &100
+JSR wrdbl \ no leading 0s
+JMP OSNEWL \ JMP>RTS
+:
+.wrdbl
+\ As wrdbl0 but sets A=0 first.
+LDA #0
+\
+.wrdbl0
+\ Write 32-bit double in hex.
+\ Entry-
+\   YX=double addr,
+\   A=0/1 strip/print leading 0s
+\ Exit -
+\   AXY undefined
+ADC #&FF \ A->C
+LDA scratch
+PHA
+LDA scratch+1
+PHA
+STX scratch
+STY scratch+1
+LDA #0 \ recover C->A
+ADC #0
+TAX \ leading 0s flag
+LDY #3 \ byte #; start at MSB
+.loop
+LDA (scratch),Y
+BNE wrdblhex \ <>0 - write
+CPX #0 \ leading zeroes?
+BNE wrdblhex \ no - write
+CPY #0 \ last digit?
+BNE skipwrdblhex \ no - skip
+.wrdblhex
+JSR wrbyte
+INX \ set not in leading zeros
+.skipwrdblhex
+DEY \ move to next byte MSB->LSB
+BPL loop
+PLA
+STA scratch+1
+PLA
+STA scratch
+RTS
+:
+.wrbyte
+\ Write a single hex byte.
+\ Entry- A=byte
+\ Exit - AXY preserved
+PHA
+LSR A \ shift high nibble to low
+LSR A
+LSR A
+LSR A
+JSR wrnibble
+PLA
+PHA
+AND #&0F \ get low nibble
+JSR wrnibble
+PLA
+RTS
+:
+.wrnibble
+\ Write a single hex digit.
+\ Entry- A[0-3]=nibble,
+\         [4-7]=must be 0
+\ Exit - AXY undefined
+PHP
+SED
+CMP #10 \ C=(>=&A)
+ADC #ASC"0" \ C=>+&10=>"ABCDEF"
+PLP
+JMP OSASCI \ JMP>RTS
+:
+.wrdec
+\ As wrdec0 but sets X=0.
+LDX #0
+:
+.wrdec0
+\ Write decimal digit in A
+\ Entry-
+\   A=value,
+\   X=0/1 strip/print leading 0s
+\ Exit -
+\   AXY undefined
+PHA
+SEC
+LDX #0 \ in leading 0s
+LDY #&FF
+.loop
+INY
+SBC #100
+BCS loop
+JSR wrdecdigit
+CLC
+ADC #100
+LDY #&FF
+.loop
+INY
+SBC #10
+BCS loop
+JSR wrdecdigit
+CLC
+ADC #10+ASC"0"
+JSR OSASCI
+PLA
+RTS
+:
+.wrdecdigit
+PHA
+TYA
+BNE wrdecdigitdo
+CPX #0
+BEQ skipdecdigit
+.wrdecdigitdo
+ORA #ASC"0"
+JSR OSASCI
+INX
+.skipdecdigit
+PLA
 RTS
 :
 \ --- TX ---
@@ -1285,6 +1596,9 @@ EQUB 0
 .peer
 EQUW 0 \ stn.net
 :
+.port
+EQUB 0 \ client port
+:
 .fnameaddr
 \ address of filename entered by
 \ user
@@ -1320,71 +1634,9 @@ EQUB 0
 EQUB 0
 EQUB 0
 :
-\ GENERAL ROUTINES
-:
-.wrdbl
-\ As wrdbl0 but sets A=0 first.
-LDA #0
-\
-.wrdbl0
-\ Write 32-bit double in hex.
-\ Entry-
-\   YX=double addr,
-\   A=0/1 strip/print leading 0s
-\ Exit -
-\   AXY undefined,
-\   Overwrites scratch
-:
-STX scratch
-STY scratch+1
-TAX \ in leading 0s flag
-LDY #3 \ byte #; start at MSB
-.loop
-LDA (scratch),Y
-BNE wrdblhex \ <>0 - write
-CPX #0 \ leading zeroes?
-BNE wrdblhex \ no - write
-CPY #0 \ last digit?
-BNE skipwrdblhex \ no - skip
-.wrdblhex
-JSR wrbyte
-INX \ set not in leading zeros
-.skipwrdblhex
-DEY \ move to next byte MSB->LSB
-BPL loop
-RTS
-:
-.wrbyte
-\ Write a single hex byte.
-\ Entry- A=byte
-\ Exit - AXY preserved
-PHA
-LSR A \ shift high nibble to low
-LSR A
-LSR A
-LSR A
-JSR wrnibble
-PLA
-PHA
-AND #&0F \ get low nibble
-JSR wrnibble
-PLA
-RTS
-:
-.wrnibble
-\ Write a single hex digit.
-\ Entry- A[0-3]=nibble,
-\         [4-7]=must be 0
-\ Exit - AXY undefined
-PHP
-SED
-CMP #10
-ADC #&30
-PLP
-JMP OSASCI \ JMP>RTS
+\ DEBUG ROUTINES
 :
 .wrreg
-\ DEBUG- write out registers
 PHA
 LDA #ASC"("
 JSR OSASCI
