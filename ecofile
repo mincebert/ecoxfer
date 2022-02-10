@@ -26,7 +26,7 @@ rxtimeout%=500
 :
 polldelay%=10
 polltimeout%=500
-maxxfr=20:REM in single packet
+maxxfr=256:REM in single packet
 readbytes=maxxfr:REM bytes read by OSGBPB must be >=maxxfr
 buflen=readbytes+13:REM +13 for OSGBPB param block
 srv_port%=100
@@ -38,7 +38,7 @@ DIM F 100,S 20
 PROCassemble
 :
 REM test send routine
-$F="T1"
+$F="$.DEV*.ECO*.T1"
 !S=81
 S!2=F
 X%=S
@@ -261,21 +261,56 @@ STA remain,Y
 DEY
 BPL loop
 :
-\ print file info
+\ print and copy leaf part of
+\ filename into buffer for
+\ transmission
+:
 LDA fnameaddr
 STA scratch
 LDA fnameaddr+1
 STA scratch+1
-LDY #0
+:
+\ find end of filename
+LDX #0 \ index after last dot
+LDY #0 \ current index
 .loop
 LDA (scratch),Y
-CMP #13
+INY
+CMP #13 \ =CR
+BEQ saveleafname
+CMP #ASC"."
+BNE loop
+TYA \ save position after dot
+TAX
+JMP loop
+:
+.saveleafname
+\ copy leaf part of filename
+TXA
+TAY
+LDX #0 \ pos in leaf
+.loop
+LDA (scratch),Y
+STA buffer+18,X
+INX
+CMP #13 \ =CR
 BEQ printfilenums
 JSR OSASCI
 INY
-JMP loop
+CPX #10 \ limit to 10 chars
+BMI loop
+:
+.truncleafname
+LDA #13 \ =CR
+STA buffer+18,X
 :
 .printfilenums
+\ store len on stack
+TXA
+PHA
+:
+\ print load, execute, len
+:
 \ space
 LDA #ASC" "
 JSR OSASCI
@@ -314,33 +349,17 @@ STA buffer
 LDA #cli_port%
 STA buffer+1
 :
-\ copy filename into buffer for
-\ transmission
-\ TODO- should trim to leaf name
-LDA fnameaddr
-STA scratch
-LDA fnameaddr+1
-STA scratch+1
-LDY #0
-.loop
-LDA (scratch),Y
-STA buffer+18,Y
-INY
-CMP #13
-BNE loop
-:
 \ build tx cblock
 :
 \ store size of buffer in cblock
 \ and add start addr to get end
 \ (size = filename len + 18
 \ bytes for file info header)
-TYA
-\ C=1 from CMP above as equal
-ADC #17 \ short => no carry
-ADC #buffer AND &FF \ may carry
+PLA
+CLC
+ADC #(buffer+19) AND &FF
 STA cblock+8 \ buffer end addr
-LDA #buffer DIV &100
+LDA #(buffer+19) DIV &100
 ADC #0
 STA cblock+9
 \ top bytes blanked below
