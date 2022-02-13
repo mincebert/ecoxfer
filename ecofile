@@ -1009,6 +1009,10 @@ STA fhandle
 :
 \ BLOCK REQUEST
 :
+.rcvxfrloop
+:
+LDA #13 \ =CR
+JSR OSWRCH
 LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
@@ -1063,13 +1067,15 @@ LDA peer
 STA cblock+3
 LDA peer+1
 STA cblock+4
-LDA #buffer AND &FF
+\ get to buffer+8 so we can put
+\ a OSGBPB param block in front
+LDA #(buffer+8) AND &FF
 STA cblock+5
-LDA #buffer DIV &100
+LDA #(buffer+8) DIV &100
 STA cblock+6
-LDA #(buffer+5+maxxfr) AND &FF
+LDA #(buffer+8+5+maxxfr) AND &FF
 STA cblock+9
-LDA #(buffer+5+maxxfr) DIV &100
+LDA #(buffer+8+5+maxxfr) DIV &100
 STA cblock+10
 LDA #0
 STA cblock+7
@@ -1089,7 +1095,7 @@ EQUB 0
 :
 .replyrecv
 \ check is block send
-LDA buffer
+LDA buffer+8
 CMP #OP_BLKSND
 BEQ rcvblksnd
 \ incorrect packet operation
@@ -1100,6 +1106,85 @@ EQUS "Block send?"
 EQUB 0
 :
 .rcvblksnd
+LDY #3
+.loop
+LDA currpos,Y
+STA buffer+5,Y
+DEY
+BPL loop
+LDX #(buffer+5) AND &FF
+LDY #(buffer+5) DIV &100
+JSR cmpdbl
+BEQ rcvblkmatch
+JSR cleanup
+BRK
+EQUB 218 \ =CFS Block
+EQUS "Block offset"
+EQUB 0
+:
+.rcvblkmatch
+\ calculate bytes received
+\ based on end-start
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR sbcdblsec
+\ minus the 5 bytes for the
+\ block send header
+SEC
+LDA cblock+5
+SBC #5
+STA cblock+5
+LDA cblock+6
+SBC #0
+STA cblock+6
+:
+LDA fhandle
+STA buffer
+LDA #(buffer+13) AND &FF
+STA buffer+1
+LDA #(buffer+13) DIV &100
+STA buffer+2
+LDA cblock+5
+STA buffer+5
+LDA cblock+6
+STA buffer+6
+LDA #0
+STA buffer+3
+STA buffer+4
+STA buffer+7
+STA buffer+8
+:
+LDA #2 \ =append
+LDX #buffer AND &FF
+LDY #buffer DIV &100
+JSR OSGBPB
+BCC rcvupdcurrpos
+JSR cleanup
+BRK
+EQUB 100 \ TODO
+EQUS "Error writing file"
+EQUB 0
+:
+.rcvupdcurrpos
+LDY #3
+.loop
+LDA currpos,Y
+STA cblock+1,Y
+DEY
+BPL loop
+LDX #(cblock+1) AND &FF
+LDY #(cblock+1) DIV &100
+JSR adcdblclc \ => cblock+5
+LDY #3
+.loop
+LDA cblock+5,Y
+STA currpos,Y
+DEY
+BPL loop
+:
+JMP rcvxfrloop
+:
+.oksofar
 LDY #0
 .loop
 LDA oksofarmsg,Y
