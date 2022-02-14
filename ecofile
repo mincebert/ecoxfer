@@ -486,7 +486,9 @@ BNE waitblkreq \ <>0=more
 DEY
 BPL loop
 :
-\ finished transfer
+.done
+\ finished transfer (also use
+\ for receive)
 :
 \ close the file
 JSR cleanup
@@ -1012,11 +1014,23 @@ STA fhandle
 .rcvxfrloop
 :
 LDA #13 \ =CR
-JSR OSWRCH
+JSR OSWRCH \ CR but not LF
 LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
 :
+\ if nothing left to transfer,
+\ we're done, else request next
+\ block
+LDY #3
+.loop
+LDA remain,Y
+BNE rcvreqblk
+DEY
+BPL loop
+JMP done
+:
+.rcvreqblk
 LDA #OP_BLKREQ
 STA buffer
 LDY #3
@@ -1127,7 +1141,7 @@ EQUB 0
 \ based on end-start
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
-JSR sbcdblsec
+JSR sbcdblsec \ => cblock+5
 \ minus the 5 bytes for the
 \ block send header
 SEC
@@ -1138,6 +1152,24 @@ LDA cblock+6
 SBC #0
 STA cblock+6
 :
+\ check is less than remain
+LDY #3
+.loop
+LDA remain,Y
+STA cblock+9,Y
+DEY
+BPL loop
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR cmpdbl
+BPL rcvblksizeok
+JSR cleanup
+BRK
+EQUB 100 \ TODO
+EQUS "Block oversize"
+EQUB 0
+:
+.rcvblksizeok
 LDA fhandle
 STA buffer
 LDA #(buffer+13) AND &FF
@@ -1169,16 +1201,33 @@ EQUB 0
 LDY #3
 .loop
 LDA currpos,Y
-STA cblock+1,Y
+STA cblock+9,Y
 DEY
 BPL loop
-LDX #(cblock+1) AND &FF
-LDY #(cblock+1) DIV &100
-JSR adcdblclc \ => cblock+5
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR adcdblclc \ => cblock+9
+LDY #3
+.loop
+LDA cblock+9,Y
+STA currpos,Y
+DEY
+BPL loop
+:
+\ update remain
+LDY #3
+.loop
+LDA remain,Y
+STA cblock+9,Y
+DEY
+BPL loop
+LDX #(cblock+5) AND &FF
+LDY #(cblock+5) DIV &100
+JSR sbcdblsec \ => cblock+1
 LDY #3
 .loop
 LDA cblock+5,Y
-STA currpos,Y
+STA remain,Y
 DEY
 BPL loop
 :
