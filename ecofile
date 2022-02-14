@@ -36,16 +36,28 @@ DIM cblock 13,buffer buflen
 DIM F 100,S 20
 :
 PROCassemble
+PROCtestasmrecv("T3",81)
+END
 :
-REM test routine
-$F="T3"
-!S=81
+DEFPROCtestasmsend(filename$,station%)
+$F=filename$
+!S=station%
+S!2=F
+X%=S
+Y%=S DIV 256
+PRINT "Sending..."
+PRINT ~USR(send)
+ENDPROC
+:
+DEFPROCtestasmrecv(filename$,station%)
+$F=filename$
+!S=station%
 S!2=F
 X%=S
 Y%=S DIV 256
 PRINT "Receiving..."
 PRINT ~USR(receive)
-END
+ENDPROC
 :
 REPEAT
 INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
@@ -252,7 +264,6 @@ EQUS "Not found"
 EQUB 0
 :
 .savefilelen
-JSR savefilelen
 \ print and copy leaf part of
 \ filename into buffer for
 \ transmission
@@ -476,6 +487,8 @@ JSR OSWRCH \ CR but not LF
 LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
+LDA #ASC" "
+JSR OSASCI
 :
 \ check if there is anything
 \ left to transfer
@@ -1018,6 +1031,8 @@ JSR OSWRCH \ CR but not LF
 LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
+LDA #ASC" "
+JSR OSASCI
 :
 \ if nothing left to transfer,
 \ we're done, else request next
