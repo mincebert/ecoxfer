@@ -27,8 +27,7 @@ rxtimeout%=500
 polldelay%=10
 polltimeout%=500
 maxxfr=256:REM in single packet
-readbytes=maxxfr:REM bytes read by OSGBPB must be >=maxxfr
-buflen=readbytes+13:REM +13 for OSGBPB param block
+buflen=maxxfr+13:REM +13 for OSGBPB param block
 srv_port=100
 cli_port=101
 DIM cblock 13,buffer buflen
@@ -36,8 +35,9 @@ DIM cblock 13,buffer buflen
 DIM F 100,S 20
 :
 PROCassemble
+REM PROCtestasmsend("T1",81)
 PROCtestasmrecv("T3",81)
-END
+STOP
 :
 DEFPROCtestasmsend(filename$,station%)
 $F=filename$
@@ -255,7 +255,7 @@ LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSFILE
 CMP #1 \ =file found
-BEQ savefilelen
+BEQ sndfindleaf
 \ not found
 JSR scratchrestore
 BRK
@@ -263,7 +263,7 @@ EQUB 214 \ =Not found
 EQUS "Not found"
 EQUB 0
 :
-.savefilelen
+.sndfindleaf
 \ print and copy leaf part of
 \ filename into buffer for
 \ transmission
@@ -280,14 +280,14 @@ LDY #0 \ current index
 LDA (scratch),Y
 INY
 CMP #13 \ =CR
-BEQ saveleafname
+BEQ sndcopyleaf
 CMP #ASC"."
 BNE loop
 TYA \ save position after dot
 TAX
 JMP loop
 :
-.saveleafname
+.sndcopyleaf
 \ copy leaf part of filename
 TXA
 TAY
@@ -297,22 +297,21 @@ LDA (scratch),Y
 STA buffer+18,X
 INX
 CMP #13 \ =CR
-BEQ printtxmeta
+BEQ sndprintinfo
 JSR OSASCI
 INY
-CPX #10 \ limit to 10 chars
+CPX #10
 BCC loop
-:
-.truncleafname
+\ file >10 chars - truncate
 LDA #13 \ =CR
 STA buffer+18,X
 :
-.printtxmeta
+.sndprintinfo
 \ store len on stack
 TXA
 PHA
 \ print attributes
-JSR printmeta
+JSR printinfo
 :
 \ BUILD + SEND FILE HEADER
 :
@@ -332,7 +331,7 @@ STA buffer+1
 \ store size of buffer in cblock
 \ and add start addr to get end
 \ (size = op/port (2) + meta
-\ data (16) + filename len)
+\ data (16) + filename + CR)
 PLA
 CLC
 ADC #(buffer+19) AND &FF
@@ -370,19 +369,19 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ openin \ X=1-success
+BEQ sndopenin \ X=1-success
 JMP neterror
 :
 \ PREPARE FOR TX FILE BLOCKS
 :
-.openin
+.sndopenin
 LDA #&40 \ =openin
 LDX fnameaddr
 LDY fnameaddr+1
 JSR OSFIND
 STA fhandle
 TAX
-BNE openinok
+BNE sndinitread
 \ open in error
 JSR scratchrestore
 BRK
@@ -390,23 +389,22 @@ EQUB 214 \ =Not found
 EQUS "Not found"
 EQUB 0
 :
-.openinok
+.sndinitread
 JSR initfilemeta
 STA buffused \ word
 STA buffused+1
 :
-\ MAIN BLOCK TRANSFER LOOP
+\ SEND TRANSFER LOOP
 :
-.xfrloop
+.sndxfrloop
 :
 \ check if any bytes left in the
 \ buffer after sending the
 \ previous packet - if there
 \ are, we just use those
 LDA buffused
-BNE getblkreq
-LDA buffused+1
-BNE getblkreq
+ORA buffused+1
+BNE sndgetblkreq
 :
 \ buffer empty so read in
 \ another block of maxxfr bytes
@@ -427,16 +425,16 @@ LDA #(buffer+13) DIV &100
 STA buffer+2
 \ max bytes to read (word) to
 \ buffer+5
-LDA #readbytes AND &FF
+LDA #maxxfr AND &FF
 STA buffer+5
-LDA #readbytes DIV &100
+LDA #maxxfr DIV &100
 STA buffer+6
 \ zero top 2 bytes of 32-bit
 \ addrs
 LDA #0
 STA buffer+3 \ buffer addr+2
 STA buffer+4
-STA buffer+7 \ readbytes addr+2
+STA buffer+7 \ maxxfr addr+2
 STA buffer+8
 :
 \ remaining bytes to buffer+9
@@ -447,7 +445,7 @@ STA buffer+9,Y
 DEY
 BPL loop
 :
-\ min(readbytes,remain) is bytes
+\ min(maxxfr,remain) is bytes
 \ to read
 LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
@@ -468,7 +466,7 @@ LDA #4 \ =read at current pos
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSGBPB
-BCC getblkreq \ =success
+BCC sndgetblkreq \ =success
 \ error reading file
 JMP cleanup
 BRK
@@ -476,26 +474,18 @@ EQUB 189 \ =Access violation
 EQUS "File read error"
 EQUB 0
 :
-.getblkreq
+.sndgetblkreq
 :
 \ BLOCK REQUEST RX
 :
-\ print next byte expected to tx
-\ and in the blkreq
-LDA #13
-JSR OSWRCH \ CR but not LF
-LDX #currpos AND &FF
-LDY #currpos DIV &100
-JSR wrdbl
-LDA #ASC" "
-JSR OSASCI
+JSR printcurrpos
 :
 \ check if there is anything
 \ left to transfer
 LDY #3
 .loop
 LDA remain,Y
-BNE waitblkreq \ <>0=more
+BNE sndwaitblkreq \ <>0=more
 DEY
 BPL loop
 :
@@ -507,17 +497,17 @@ BPL loop
 JSR cleanup
 LDY #0
 .loop
-LDA okmsg,Y
+LDA donemsg,Y
 INY
 JSR OSASCI
 CMP #13
 BNE loop
 RTS
-.okmsg
+.donemsg
 EQUS "Done"
-EQUB 13
+EQUB 13 \ =CR
 :
-.waitblkreq
+.sndwaitblkreq
 \ set up rx cblock
 LDA #cli_port
 STA cblock+2
@@ -527,7 +517,6 @@ STA cblock+3
 LDA peer+1
 STA cblock+4
 :
-.fileinfocblock
 \ set start addr
 LDA #buffer AND &FF
 STA cblock+5
@@ -550,7 +539,7 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR rx
 TXA
-BMI chkblkreq \ X[7]=success
+BMI sndchkblkreqpkt \ X[7]=OK
 \ no block request received
 JSR cleanup
 BRK
@@ -558,19 +547,19 @@ EQUB &42 \ =no scout
 EQUS "Block request timeout"
 EQUB 0
 :
-.chkblkreq
-\ check is block request
+.sndchkblkreqpkt
+\ check is block request pkt
 LDA buffer
 CMP #OP_BLKREQ
-BEQ rcvblkreq
+BEQ sndblkreqrcv
 \ incorrect packet operation
 JSR cleanup
 BRK
 EQUB 217 \ =CFS Header
-EQUS "Block request?"
+EQUS "Not block request"
 EQUB 0
 :
-.rcvblkreq
+.sndblkreqrcv
 \ end-start=bytes received
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
@@ -585,15 +574,15 @@ STA cblock+12
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR cmpdbl
-BEQ calcxfr
+BEQ sndcalcxfr
 \ size<>9
 JSR cleanup
 BRK
 EQUB 20 \ =Too big
-EQUS "Block request size"
+EQUS "Block request invalid"
 EQUB 0
 :
-.calcxfr
+.sndcalcxfr
 \ bytes to transfer is
 \ min(buffused,maxxfr); buffused
 \ is left in buffer+5, above
@@ -654,15 +643,15 @@ BPL loop
 LDX #(buffer+1) AND &FF
 LDY #(buffer+1) DIV &100
 JSR cmpdbl
-BEQ updcurrpos \ =same
+BEQ sndupdcurrpos \ =same
 \ offset mismatch
 JSR cleanup
 BRK
 EQUB 218 \ =CFS Block
-EQUS "Block offset"
+EQUS "Block request pos"
 EQUB 0
 :
-.updcurrpos
+.sndupdcurrpos
 \ calculate new currpos
 \ (buffer+5 = currpos)
 \ bytes to be transferred to
@@ -678,7 +667,7 @@ STA buffer+12
 LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
 JSR adcdblclc \ => buffer+9
-\ update position
+\ update current position
 LDY #3
 .loop
 LDA buffer+9,Y
@@ -709,15 +698,16 @@ STA buffer+6
 :
 \ add size of header (5 bytes)
 \ to len (cblock+8 contains len)
-LDA #5
-STA cblock+4
+CLC
+LDA cblock+8
+ADC #5
+STA cblock+8
+LDA cblock+9
+ADC #0
+STA cblock+9
 LDA #0
-STA cblock+5
-STA cblock+6
-STA cblock+7
-LDX #(cblock+4) AND &FF
-LDY #(cblock+4) DIV &100
-JSR adcdblclc \ => cblock+8
+STA cblock+10
+STA cblock+11
 :
 \ buffer start address
 LDA #(buffer+8) AND &FF
@@ -760,10 +750,10 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ shufflechk \ X=1-success
+BEQ sndshuffchk \ X=1-success
 JMP neterror
 :
-.shufflechk
+.sndshuffchk
 \ shuffle the untransmitted data
 \ in the buffer to the start
 \
@@ -775,11 +765,11 @@ JMP neterror
 \ shuffling required
 LDA buffused
 ORA buffused+1
-BNE shufflebuff256
-.jmpxfrloop
-JMP xfrloop
+BNE sndshuffbuff256
+.sndjmpxfrloop
+JMP sndxfrloop
 :
-.shufflebuff256
+.sndshuffbuff256
 \ calculate the buffer src addr
 \ (start after header + bytes
 \ transferred) into scratch+0/1
@@ -803,7 +793,7 @@ STA scratch+3
 \ move the blocks of 256 bytes
 \ (scratch+0/1)->(scratch+2/3)
 LDX buffused+1
-BEQ shufflebuff1
+BEQ shuffbuff1
 LDY #0
 .loop
 LDA (scratch),Y
@@ -815,11 +805,11 @@ INC scratch+3
 DEX
 BNE loop
 :
-.shufflebuff1
+.shuffbuff1
 \ check there is still <256 to
 \ move
 LDX buffused
-BEQ jmpxfrloop \ no
+BEQ sndjmpxfrloop \ no
 LDY #0
 .loop
 LDA (scratch),Y
@@ -827,9 +817,9 @@ STA (scratch+2),Y
 INY
 DEX
 BNE loop
-JMP xfrloop
+JMP sndxfrloop
 :
-\ RECEIVE
+\ --- RECEIVE ---
 :
 .receive
 \ Entry-
@@ -879,6 +869,7 @@ LDA peer
 STA cblock+3
 LDA peer+1
 STA cblock+4
+:
 \ buffer start
 LDA #buffer AND &FF
 STA cblock+5
@@ -886,7 +877,7 @@ LDA #buffer DIV &100
 STA cblock+6
 \ buffer end - max is 29 (18
 \ op/port/load/exec/len/attr +
-\ 10 filename + CR)
+\ filename (10) + CR)
 LDA #(buffer+29) AND &FF
 STA cblock+9
 LDA #(buffer+29) DIV &100
@@ -897,28 +888,30 @@ STA cblock+7
 STA cblock+8
 STA cblock+11
 STA cblock+12
+:
 LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR rx
 TXA
-BMI headerrcvd
+BMI rcvchkinfopkt \ X[7]=OK
 BRK
-EQUB &42
+EQUB &42 \ =No scout
 EQUS "Timeout"
 EQUB 0
 :
-.headerrcvd
+.rcvchkinfopkt
+\ check packet type
 LDA buffer
 CMP #OP_FILEINFO
-BEQ rcvfileinfo
+BEQ rcvsaveinfo
 \ incorrect packet operation
 JSR scratchrestore
 BRK
 EQUB 217 \ =CFS Header
-EQUS "File info?"
+EQUS "Not file info"
 EQUB 0
 :
-.rcvfileinfo
+.rcvsaveinfo
 \ save peer details
 LDA buffer+1
 STA port
@@ -934,40 +927,37 @@ STA buffer
 LDA #(buffer+18) DIV &100
 STA buffer+1
 :
+\ check name is (vaguely) valid
+\ and print
 LDY #0
 .loop
 LDA buffer+18,Y
 CMP #13
-BEQ headerdone
+BEQ rcvprintpeer
 CMP #32
-BCC invalidrecvname
+BCC rcvinvalidname
 CMP #127
-BCS invalidrecvname
+BCS rcvinvalidname
 JSR OSASCI
 INY
-CPY #10
+CPY #10 \ =max length
 BCC loop
-.invalidrecvname
+.rcvinvalidname
 BRK
 EQUB 219 \ =CFS File?
 EQUS "Invalid name"
 EQUB 0
 :
-.headerdone
+.rcvprintpeer
 LDA #ASC"@"
 JSR OSASCI
-LDA peer+1
-BEQ skipnet
-JSR wrdec
-LDA #ASC"."
-JSR OSASCI
-.skipnet
-LDA peer
-JSR wrdec
+JSR printpeer
 :
+\ check if overriding filename
 LDA fnameaddr
 ORA fnameaddr+1
-BEQ recvnamedone
+BEQ rcvprintinfo \ no
+\ yes - print override
 LDA #ASC"-"
 JSR OSASCI
 LDA #ASC">"
@@ -982,18 +972,20 @@ LDY #0
 .loop
 LDA (scratch),Y
 CMP #13
-BEQ recvnamedone
+BEQ rcvprintinfo
 JSR OSASCI
 INY
 JMP loop
 :
-.recvnamedone
-JSR printmeta
+.rcvprintinfo
+JSR printinfo
 :
 \ store currpos + remain
 JSR initfilemeta
 :
-\ start+end addrs = 0
+\ CREATE FILE WITH INFO
+:
+\ start+end addrs = 0 => empty
 LDA #0
 LDY #7
 .loop
@@ -1006,46 +998,41 @@ LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSFILE
 :
-\ open file
+\ open file for append (keeping
+\ info)
 LDA #&C0 \ =openup
 LDX buffer
 LDY buffer+1
 JSR OSFIND
 TAY
-BNE openoutok
+BNE rcvopenoutok
 JSR scratchrestore
 BRK
 EQUB 214 \ =Not found
 EQUS "File error"
 EQUB 0
 :
-.openoutok
+.rcvopenoutok
 STA fhandle
 :
-\ BLOCK REQUEST
+\ RECEIVE TRANSFER LOOP
 :
 .rcvxfrloop
-:
-LDA #13 \ =CR
-JSR OSWRCH \ CR but not LF
-LDX #currpos AND &FF
-LDY #currpos DIV &100
-JSR wrdbl
-LDA #ASC" "
-JSR OSASCI
+JSR printcurrpos
 :
 \ if nothing left to transfer,
-\ we're done, else request next
-\ block
+\ we're done
 LDY #3
 .loop
 LDA remain,Y
-BNE rcvreqblk
+BNE rcvblkreq
 DEY
 BPL loop
 JMP done
 :
-.rcvreqblk
+\ build block request
+:
+.rcvblkreq
 LDA #OP_BLKREQ
 STA buffer
 LDY #3
@@ -1054,6 +1041,10 @@ LDA currpos,Y
 STA buffer+1,Y
 DEY
 BPL loop
+:
+\ we always request maxxfr even
+\ if less remains - we check
+\ when we receive it's not over
 LDA #maxxfr AND &FF
 STA buffer+5
 LDA #maxxfr DIV &100
@@ -1061,13 +1052,17 @@ STA buffer+6
 LDA #0
 STA buffer+7
 STA buffer+8
-\
+:
+\ build block request cblock
+:
 LDA port
 STA cblock+1
 LDA peer
 STA cblock+2
 LDA peer+1
 STA cblock+3
+:
+\ block request is 9 bytes long
 LDA #buffer AND &FF
 STA cblock+4
 LDA #buffer DIV &100
@@ -1076,26 +1071,29 @@ LDA #(buffer+9) AND &FF
 STA cblock+8
 LDA #(buffer+9) DIV &100
 STA cblock+9
+\ blank top bytes
 LDA #0
-STA cblock+6
+STA cblock+6 \ start addr+2
 STA cblock+7
-STA cblock+10
+STA cblock+10 \ end addr+2
 STA cblock+11
+:
 LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ blkreqok \ X=1-success
+BEQ rcvgetblksnd \ X=1-success
 JMP neterror
 :
-.blkreqok
-\ get block of file
+.rcvgetblksnd
+\ build block send rx cblock
 LDA #srv_port
 STA cblock+2
 LDA peer
 STA cblock+3
 LDA peer+1
 STA cblock+4
+:
 \ get to buffer+8 so we can put
 \ a OSGBPB param block in front
 LDA #(buffer+8) AND &FF
@@ -1106,27 +1104,29 @@ LDA #(buffer+8+5+maxxfr) AND &FF
 STA cblock+9
 LDA #(buffer+8+5+maxxfr) DIV &100
 STA cblock+10
+\ blank top bytes
 LDA #0
-STA cblock+7
+STA cblock+7 \ start addr+2
 STA cblock+8
-STA cblock+11
+STA cblock+11 \ end addr+2
 STA cblock+12
+:
 LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR rx
 TXA
-BMI replyrecv
+BMI rcvchkblksndpkt \ X[7]=OK
 JSR cleanup
 BRK
 EQUB &42 \ =No scout
 EQUS "Block send timeout"
 EQUB 0
 :
-.replyrecv
-\ check is block send
+.rcvchkblksndpkt
+\ check is block send packet
 LDA buffer+8
 CMP #OP_BLKSND
-BEQ rcvblksnd
+BEQ rcvchkblksndpos
 \ incorrect packet operation
 JSR cleanup
 BRK
@@ -1134,7 +1134,9 @@ EQUB 217 \ =CFS Header
 EQUS "Block send?"
 EQUB 0
 :
-.rcvblksnd
+.rcvchkblksndpos
+\ check pos in block matches our
+\ currpos
 LDY #3
 .loop
 LDA currpos,Y
@@ -1144,21 +1146,21 @@ BPL loop
 LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
 JSR cmpdbl
-BEQ rcvblkmatch
+BEQ rcvchkblksndlen \ yes
 JSR cleanup
 BRK
 EQUB 218 \ =CFS Block
-EQUS "Block offset"
+EQUS "Block pos"
 EQUB 0
 :
-.rcvblkmatch
+.rcvchkblksndlen
 \ calculate bytes received
 \ based on end-start
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR sbcdblsec \ => cblock+5
 \ minus the 5 bytes for the
-\ block send header
+\ header => block size
 SEC
 LDA cblock+5
 SBC #5
@@ -1177,35 +1179,40 @@ BPL loop
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR cmpdbl
-BPL rcvblksizeok
+BPL rcvblksndok \ yes
 JSR cleanup
 BRK
 EQUB 100 \ TODO
 EQUS "Block oversize"
 EQUB 0
 :
-.rcvblksizeok
+.rcvblksndok
+\ block position and len are OK
+\ so write the output file
 LDA fhandle
 STA buffer
+\ start addr
 LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
+\ number of bytes
 LDA cblock+5
 STA buffer+5
 LDA cblock+6
 STA buffer+6
+\ blank top bytes
 LDA #0
-STA buffer+3
+STA buffer+3 \ start addr+2
 STA buffer+4
-STA buffer+7
+STA buffer+7 \ bytes+2
 STA buffer+8
 :
 LDA #2 \ =append
 LDX #buffer AND &FF
 LDY #buffer DIV &100
 JSR OSGBPB
-BCC rcvupdcurrpos
+BCC rcvupdcurrpos \ OK
 JSR cleanup
 BRK
 EQUB 100 \ TODO
@@ -1213,6 +1220,7 @@ EQUS "Error writing file"
 EQUB 0
 :
 .rcvupdcurrpos
+\ add packet length to currpos
 LDY #3
 .loop
 LDA currpos,Y
@@ -1229,7 +1237,7 @@ STA currpos,Y
 DEY
 BPL loop
 :
-\ update remain
+\ subtract len from remain
 LDY #3
 .loop
 LDA remain,Y
@@ -1246,21 +1254,8 @@ STA remain,Y
 DEY
 BPL loop
 :
+\ go round for next block
 JMP rcvxfrloop
-:
-.oksofar
-LDY #0
-.loop
-LDA oksofarmsg,Y
-JSR OSASCI
-INY
-CMP #13
-BNE loop
-JSR cleanup
-RTS
-.oksofarmsg
-EQUS "OK so far"
-EQUB 13
 :
 \ UTILITY ROUTINES
 :
@@ -1346,12 +1341,9 @@ TYA
 PHA
 RTS
 :
-.printmeta
-\ Print file metadata - header
-\ is assumed to be in the
-\ buffer.
-:
-\ print load, execute, len
+.printinfo
+\ Print file info - header is
+\ assumed to be in the buffer.
 :
 \ space
 LDA #ASC" "
@@ -1377,6 +1369,27 @@ LDX #(buffer+10) AND &FF
 LDY #(buffer+10) DIV &100
 JSR wrdbl \ no leading 0s
 JMP OSNEWL \ JMP>RTS
+:
+.printcurrpos
+\ Print current pos in transfer.
+LDA #13
+JSR OSWRCH \ CR but not LF
+LDX #currpos AND &FF
+LDY #currpos DIV &100
+JSR wrdbl
+LDA #ASC" "
+JMP OSASCI \ JMP>RTS
+:
+.printpeer
+\ Print peer address.
+LDA peer+1
+BEQ printpeerskipnet
+JSR wrdec
+LDA #ASC"."
+JSR OSASCI
+.printpeerskipnet
+LDA peer
+JMP wrdec \ JMP>RTS
 :
 .initfilemeta
 \ Store length from OSFILE param
