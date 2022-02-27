@@ -6,6 +6,7 @@ REM>Ecofile
 OSWORD=&FFF1
 OSBYTE=&FFF4
 OSFILE=&FFDD
+OSARGS=&FFDA
 OSGBPB=&FFD1
 OSFIND=&FFCE
 OSASCI=&FFE3
@@ -23,7 +24,9 @@ cli_port=101
 :
 codebuf%=3000
 DIM code% codebuf%
+target%=&2000
 scratch=&70
+stack=&100
 txtimeout=500
 rxtimeout=500
 :
@@ -36,6 +39,9 @@ DIM filename 80,xfrblock 6
 PROCassemble
 REM PROCtestasmsend("T1",81)
 REM PROCtestasmrecv("T3",81)
+!scratch=filename
+$filename="82"
+CALL cmdline
 STOP
 :
 DEFPROCtestasmsend(filename$,station%)
@@ -60,8 +66,126 @@ ENDPROC
 :
 DEFPROCassemble
 FOR pass%=0 TO 1
+P%=target%
+O%=code%
 P%=code%
 [ OPT pass%*2
+.cmdline
+LDY #0
+.loop
+LDA scratch,Y
+PHA
+INY
+CPY #4
+BNE loop
+:
+JMP skiposargs
+LDA #1 \ =return cmdline addr
+LDY #0 \ =part of above
+LDX #scratch \ =addr in zp
+JSR OSARGS
+.skiposargs
+:
+LDY #&FF
+.loop
+INY
+LDA (scratch),Y
+CMP #ASC" "
+BEQ loop
+CMP #13 \ =CR
+BEQ donecmd
+:
+\ station number?
+LDA #0
+STA scratch+2 \ total
+JSR parsedec
+BCS parsenone
+BVS parseover
+JSR wrdec
+:
+.donecmd
+LDY #3
+.loop
+PLA
+STA scratch,Y
+DEY
+BPL loop
+RTS
+:
+.parsenone
+LDA #ASC"?"
+JSR OSASCI
+JMP donecmd
+:
+.parseover
+LDA #ASC">"
+JSR OSASCI
+JMP donecmd
+:
+.parsedec
+LDA #0
+STA scratch+2
+.loop
+LDA (scratch),Y
+JSR parsedecdig
+BCS parsedecdone
+\ store parsed digit
+PHA
+\ check total will not overflow
+LDA scratch+2
+CMP #26
+BCS parsedecover \ >=26 => >=260
+\ multiple total so far by 10
+ASL A
+STA scratch+2
+ASL A
+ASL A
+ADC scratch+2 \ we know C=0
+STA scratch+2
+\ add this digit
+PLA
+ADC scratch+2 \ we know C=0
+BCS parsedecover
+STA scratch+2
+INY
+JMP loop
+:
+.parsedecdone
+CPY #0
+BEQ parsedecerr \ =no digits
+CLC \ =parsed digits
+CLV \ =valid number
+RTS
+:
+.parsedecerr
+\ did not parse any characters
+\ as a decimal number - return
+\ error with C=1,V=0
+SEC
+CLV
+RTS
+:
+.parsedecover
+\ parsed number was >255 -
+\ return overflow with V=1,C=0
+LDA #&7F
+ADC #1 \ => C=0
+RTS
+:
+.parsedecdig
+CMP #ASC"0"
+BCC parsedecdiginvsec
+CMP #ASC"9"+1
+BCS parsedecdiginv
+SBC #ASC"0"-1 \ C=0 => ASC"0"
+CLC \ =parsed digit
+RTS
+:
+.parsedecdiginvsec
+SEC \ =not digit
+.parsedecdiginv
+RTS
+:
 \ --- SEND ---
 :
 .send
@@ -1337,6 +1461,22 @@ ADC #ASC"0" \ C=>+&10=>"ABCDEF"
 PLP
 JMP OSASCI \ JMP>RTS
 :
+.wrdecxy
+PHA
+TXA
+PHA
+TYA
+PHA
+TSX
+LDA stack+2,X
+JSR wrdec
+PLA
+TAY
+PLA
+TAX
+PLA
+RTS
+:
 .wrdec
 \ As wrdec0 but sets X=0.
 LDX #0
@@ -1347,7 +1487,7 @@ LDX #0
 \   A=value,
 \   X=0/1 strip/print leading 0s
 \ Exit -
-\   AXY undefined
+\   A unchanged,XY undefined
 PHA
 SEC
 LDX #0 \ in leading 0s
@@ -1813,5 +1953,9 @@ REM code block has overrun
 REM following variables
 IF P%-code%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
 NEXT
-PRINT "Code assembled at &";~code%;"+";~P%-code%
+PRINT "Code assembled at &";~code%;"+";~O%-code%;" for ";~target%
+targethost%=&FFFF0000 OR target%
+save$="SAVE XF "+STR$~code%+"+"+STR$~(O%-code%)+" "+STR$~targethost%+" "+STR$~targethost%
+PRINT "*";save$
+REM OSCLI(save$)
 ENDPROC
