@@ -40,7 +40,7 @@ PROCassemble
 REM PROCtestasmsend("T1",81)
 REM PROCtestasmrecv("T3",81)
 !scratch=filename
-$filename="82"
+$filename=""
 CALL cmdline
 STOP
 :
@@ -92,12 +92,8 @@ INY
 LDA (scratch),Y
 CMP #ASC" "
 BEQ loop
-CMP #13 \ =CR
-BEQ donecmd
 :
 \ station number?
-LDA #0
-STA scratch+2 \ total
 JSR parsedec
 BCS parsenone
 BVS parseover
@@ -126,15 +122,20 @@ JMP donecmd
 LDA #0
 STA scratch+2
 .loop
+LDA #ASC"=":JSR OSASCI
 LDA (scratch),Y
+JSR OSASCI
 JSR parsedecdig
 BCS parsedecdone
 \ store parsed digit
-PHA
+TAX
+LDA #ASC"<":JSR OSASCI:PLA:PHA:JSR wrdecxy:LDA #ASC">":JSR OSASCI
 \ check total will not overflow
+LDA #ASC"T":JSR OSASCI
 LDA scratch+2
+JSR wrdecxy
 CMP #26
-BCS parsedecover \ >=26 => >=260
+BCS parsedecover \ >=26*10 => V
 \ multiple total so far by 10
 ASL A
 STA scratch+2
@@ -142,8 +143,10 @@ ASL A
 ASL A
 ADC scratch+2 \ we know C=0
 STA scratch+2
-\ add this digit
-PLA
+LDA #ASC"*":JSR OSASCI:LDA scratch+2:JSR wrdecxy
+\ add this digit to total
+TXA
+CLC \ whilst "*N" above
 ADC scratch+2 \ we know C=0
 BCS parsedecover
 STA scratch+2
@@ -151,6 +154,7 @@ INY
 JMP loop
 :
 .parsedecdone
+LDA scratch+2
 CPY #0
 BEQ parsedecerr \ =no digits
 CLC \ =parsed digits
@@ -165,6 +169,8 @@ SEC
 CLV
 RTS
 :
+.parsedecoverpla
+PLA
 .parsedecover
 \ parsed number was >255 -
 \ return overflow with V=1,C=0
@@ -1468,7 +1474,7 @@ PHA
 TYA
 PHA
 TSX
-LDA stack+2,X
+LDA stack+3,X
 JSR wrdec
 PLA
 TAY
