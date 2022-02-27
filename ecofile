@@ -13,6 +13,10 @@ OSASCI=&FFE3
 OSNEWL=&FFE7
 OSWRCH=&FFEE
 :
+REM transfer directions
+DIR_SND=&01
+DIR_RCV=&02
+:
 REM packet types
 OP_FILEINFO=&01
 OP_BLKREQ=&81
@@ -40,26 +44,22 @@ PROCassemble
 REM PROCtestasmsend("T1",81)
 REM PROCtestasmrecv("T3",81)
 !scratch=filename
-$filename="81 MONCE"
+$filename="81 T1"
 CALL cmdline
 STOP
 :
 DEFPROCtestasmsend(filename$,station%)
 $filename=filename$
-!xfrblock=station%
-xfrblock!2=filename
-X%=xfrblock
-Y%=xfrblock DIV &100
+peer?0=station% AND &FF
+peer?1=station% DIV &100
 PRINT "Sending..."
 PRINT ~USR(send)
 ENDPROC
 :
 DEFPROCtestasmrecv(filename$,station%)
 $filename=filename$
-!xfrblock=station%
-xfrblock!2=filename
-X%=xfrblock
-Y%=xfrblock DIV &100
+peer?0=station% AND &FF
+peer?1=station% DIV &100
 PRINT "Receiving..."
 PRINT ~USR(receive)
 ENDPROC
@@ -71,6 +71,9 @@ O%=code%
 P%=code%
 [ OPT pass%*2
 .cmdline
+\ --- PARSE COMMAND LINE ---
+:
+\ save scratch+0-4 to stack
 LDY #0
 .loop
 LDA scratch,Y
@@ -86,6 +89,11 @@ LDX #scratch \ =addr in zp
 JSR OSARGS
 .skiposargs
 :
+\ initialise direction to send
+LDA #DIR_SND
+STA dir
+:
+\ skip leading spaces
 LDY #&FF
 .loop
 INY
@@ -126,6 +134,16 @@ LDA (scratch),Y
 CMP #ASC" "
 BEQ loop
 :
+\ if first char of filename is
+\ "=" then receving and renaming
+LDA (scratch),Y
+CMP #ASC"="
+BNE copyfname
+INY
+LDA #DIR_RCV
+STA dir
+:
+.copyfname
 \ copy filename
 LDX #0
 .loop
@@ -135,29 +153,25 @@ INY
 INX
 CMP #13 \ =CR
 BNE loop
-LDY #0
-.loop
-LDA filename,Y
-JSR OSASCI
-INY
-CMP #13 \ =CR
-BNE loop
 :
-.donecmd
-JSR printpeer
-LDY #3
-.loop
-PLA
-STA scratch,Y
-DEY
-BPL loop
+\ if only CR then receiving
+CPX #1
+BNE docmd
+LDA #DIR_RCV
+STA dir
+:
+.docmd
+LDA dir
+CMP #DIR_RCV
+BEQ dorcv
+JSR send
+.done
+JSR scratchrestore \ JMP>RTS
 RTS
 :
-JSR scratchrestore
-RTS
-LDA #ASC"?"
-JSR OSASCI
-JMP donecmd
+.dorcv
+JSR receive
+JMP done
 :
 .badcmd
 JSR scratchrestore
@@ -272,33 +286,16 @@ RTS
 :
 .send
 \ Entry-
-\   scratch=sendblk addr,
-\   sendblk+0=dest stn,
-\          +2=filename addr
+\   peer=peer station,
+\   filename=file to send
 \ Exit - AXY=undefined
 :
-\ SETUP AND GET PARAMS
-:
-\ store peer address
-LDY #0
-LDA (scratch),Y
-STA peer
-INY
-LDA (scratch),Y
-STA peer+1
-\ store filename addr and in
-\ start of buffer for OSGBPB,
-\ below
-INY
-LDA (scratch),Y
-STA fnameaddr
-STA buffer
-INY
-LDA (scratch),Y
-STA fnameaddr+1
-STA buffer+1
-:
 \ GET FILE INFORMATION
+:
+LDA #filename AND &FF
+STA buffer
+LDA #filename DIV &100
+STA buffer+1
 :
 LDA #5 \ =read info for file
 LDX #buffer AND &FF
@@ -318,9 +315,9 @@ EQUB 0
 \ filename into buffer for
 \ transmission
 :
-LDA fnameaddr
+LDA #filename AND &FF
 STA scratch
-LDA fnameaddr+1
+LDA #filename DIV &100
 STA scratch+1
 :
 \ find end of filename
@@ -426,8 +423,8 @@ JMP neterror
 :
 .sndopenin
 LDA #&40 \ =openin
-LDX fnameaddr
-LDY fnameaddr+1
+LDX #filename AND &FF
+LDY #filename DIV &100
 JSR OSFIND
 STA fhandle
 TAX
@@ -873,30 +870,10 @@ JMP sndxfrloop
 :
 .receive
 \ Entry-
-\   scratch=sendblk addr,
-\   sendblk
-\     +0=dest stn (0.0=any),
-\     +2=filename addr (0=sent)
+\   peer=peer station,
+\   filename=file to receive
+\     (empty=use sent name)
 \ Exit - AXY=undefined
-:
-\ SETUP AND GET PARAMS
-:
-\ store peer address
-LDY #0
-LDA (scratch),Y
-STA peer
-INY
-LDA (scratch),Y
-STA peer+1
-\ store filename addr and in
-\ start of buffer for OSGBPB,
-\ below
-INY
-LDA (scratch),Y
-STA fnameaddr
-INY
-LDA (scratch),Y
-STA fnameaddr+1
 :
 \ build RX cblock
 :
@@ -991,18 +968,18 @@ JSR OSASCI
 JSR printpeer
 :
 \ check if overriding filename
-LDA fnameaddr
-ORA fnameaddr+1
+LDA filename
+CMP #13 \ =CR
 BEQ rcvprintinfo \ no
 \ yes - print override
 LDA #ASC"-"
 JSR OSASCI
 LDA #ASC">"
 JSR OSASCI
-LDA fnameaddr
+LDA #filename AND &FF
 STA scratch
 STA buffer \ for OSFILE
-LDA fnameaddr+1
+LDA #filename DIV &100
 STA scratch+1
 STA buffer+1
 LDY #0
@@ -1300,7 +1277,7 @@ JMP rcvxfrloop
 LDA #0 \ =close
 LDY fhandle
 JSR OSFIND
-JMP scratchrestore \ JMP>RTS
+RTS
 :
 .neterror
 \ calculate offset of this error
@@ -1892,6 +1869,10 @@ RTS
 :
 \ --- variable storage ---
 :
+.dir
+\ transfer direction - see DIR_X
+EQUB 0
+:
 .fhandle
 EQUB 0
 :
@@ -1903,11 +1884,6 @@ EQUW 0 \ stn.net
 :
 .port
 EQUB 0 \ client port
-:
-.fnameaddr
-\ address of filename entered by
-\ user
-EQUW 0
 :
 .currpos
 \ bytes transferred so far =>
