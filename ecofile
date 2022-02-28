@@ -180,6 +180,13 @@ EQUS "Bad station number"
 EQUB 0
 :
 .parsedec
+\ Parse one byte decimal number.
+\ Entry -
+\   (scratch)=addr of str,
+\   Y=start offset
+\ Exit  -
+\   A=num,C=no data,V=>255,
+\   scratch+2 undefined.
 LDA #0
 STA scratch+2
 .loop
@@ -405,8 +412,7 @@ STA cblock+4 \ buffer start addr
 LDA #buffer DIV &100
 STA cblock+5
 \ never >64K so no need to do
-\ carry - zero top of both
-\ 32-bit addrs
+\ carry - host pad addrs
 LDA #&FF
 STA cblock+6 \ start+2
 STA cblock+7
@@ -478,11 +484,11 @@ LDA #maxxfr AND &FF
 STA buffer+5
 LDA #maxxfr DIV &100
 STA buffer+6
-\ zero top 2 bytes of 32-bit
-\ addrs
+\ host pad addr
 LDA #&FF
 STA buffer+3 \ buffer addr+2
 STA buffer+4
+\ zero pad maxxfr
 LDA #0
 STA buffer+7 \ maxxfr addr+2
 STA buffer+8
@@ -578,7 +584,7 @@ LDA #(buffer+9) AND &FF
 STA cblock+9
 LDA #(buffer+9) DIV &100
 STA cblock+10
-\ zero top of 32-bit addrs
+\ host pad addrs
 LDA #&FF
 STA cblock+7 \ start addr+2
 STA cblock+8
@@ -640,7 +646,8 @@ LDA buffused
 STA buffer+9
 LDA buffused+1
 STA buffer+10
-LDA #0 \ pad buffused word
+\ zero pad buffused
+LDA #0
 STA buffer+11
 STA buffer+12
 :
@@ -710,8 +717,9 @@ LDA cblock+8
 STA buffer+9
 LDA cblock+9
 STA buffer+10
+\ zero pad bytes transferred
 LDA #0
-STA buffer+11 \ pad word
+STA buffer+11
 STA buffer+12
 \ do addition
 LDX #(buffer+5) AND &FF
@@ -755,7 +763,9 @@ STA cblock+8
 LDA cblock+9
 ADC #0
 STA cblock+9
-LDA #&FF
+\ zero pad size (adcdbl will
+\ set top bytes to &FF)
+LDA #0
 STA cblock+10
 STA cblock+11
 :
@@ -764,6 +774,7 @@ LDA #(buffer+8) AND &FF
 STA cblock+4
 LDA #(buffer+8) DIV &100
 STA cblock+5
+\ host pad addr
 LDA #&FF
 STA cblock+6
 STA cblock+7
@@ -899,7 +910,7 @@ LDA #(buffer+29) AND &FF
 STA cblock+9
 LDA #(buffer+29) DIV &100
 STA cblock+10
-\ zero pad top half of words
+\ host pad addrs
 LDA #&FF
 STA cblock+7
 STA cblock+8
@@ -1066,6 +1077,7 @@ LDA #maxxfr AND &FF
 STA buffer+5
 LDA #maxxfr DIV &100
 STA buffer+6
+\ zero pad maxxfr
 LDA #0
 STA buffer+7
 STA buffer+8
@@ -1088,7 +1100,7 @@ LDA #(buffer+9) AND &FF
 STA cblock+8
 LDA #(buffer+9) DIV &100
 STA cblock+9
-\ blank top bytes
+\ host pad addrs
 LDA #&FF
 STA cblock+6 \ start addr+2
 STA cblock+7
@@ -1121,7 +1133,7 @@ LDA #(buffer+8+5+maxxfr) AND &FF
 STA cblock+9
 LDA #(buffer+8+5+maxxfr) DIV &100
 STA cblock+10
-\ blank top bytes
+\ host pad addrs
 LDA #&FF
 STA cblock+7 \ start addr+2
 STA cblock+8
@@ -1196,7 +1208,7 @@ BPL loop
 LDX #(cblock+5) AND &FF
 LDY #(cblock+5) DIV &100
 JSR cmpdbl
-BPL rcvblksndok \ yes
+BCS rcvblksndok \ yes
 JSR cleanup
 BRK
 EQUB 218 \ =CFS Block?
@@ -1213,15 +1225,16 @@ LDA #(buffer+13) AND &FF
 STA buffer+1
 LDA #(buffer+13) DIV &100
 STA buffer+2
+\ host pad addrs
+LDA #&FF
+STA buffer+3 \ start addr+2
+STA buffer+4
 \ number of bytes
 LDA cblock+5
 STA buffer+5
 LDA cblock+6
 STA buffer+6
-\ blank top bytes
-LDA #&FF
-STA buffer+3 \ start addr+2
-STA buffer+4
+\ zero pad size
 LDA #0
 STA buffer+7 \ bytes+2
 STA buffer+8
@@ -1749,7 +1762,7 @@ CLC
 \   AXY=undefined,CZN=as ADC,
 \   block+0-3 unchanged,
 \        +4-7=Q+P,
-\   Overwrites scratch.
+\   Overwrites scratch+0/1.
 STX scratch
 STY scratch+1
 LDY #4
@@ -1788,7 +1801,7 @@ SEC
 \   AXY undefined,CZN=as SBC,
 \   block+0-3=Q-P,
 \        +4-7 unchanged
-\   Overwrites scratch.
+\   Overwrites scratch+0/1.
 STX scratch
 STY scratch+1
 LDY #4
@@ -1821,7 +1834,7 @@ RTS
 \   block+0-3=P,+4-7=Q
 \ Exit -
 \   AXY undefined,CZN=as CMP
-\   Overwrites scratch.
+\   Overwrites scratch+0/1.
 STX scratch
 STY scratch+1
 CLC
