@@ -26,7 +26,7 @@ REM econet ports
 srv_port=100
 cli_port=101
 :
-codebuf%=3000
+codebuf%=&1000
 DIM code% codebuf%
 target%=&2000
 scratch=&70
@@ -36,16 +36,10 @@ rxtimeout=500
 :
 maxxfr=256:REM in single packet
 buflen=maxxfr+13:REM +13 for OSGBPB param block
-DIM cblock 13,buffer buflen
-:
-DIM filename 80,xfrblock 6
 :
 PROCassemble
 REM PROCtestasmsend("T1",81)
 REM PROCtestasmrecv("T3",81)
-!scratch=filename
-$filename="81 T1"
-CALL cmdline
 STOP
 :
 DEFPROCtestasmsend(filename$,station%)
@@ -68,9 +62,9 @@ DEFPROCassemble
 FOR pass%=0 TO 1
 P%=target%
 O%=code%
-P%=code%
-[ OPT pass%*2
-.cmdline
+opt%=4+pass%*2
+[ OPT opt%
+.start
 \ --- PARSE COMMAND LINE ---
 :
 \ save scratch+0-4 to stack
@@ -82,12 +76,10 @@ INY
 CPY #4
 BNE loop
 :
-JMP skiposargs
 LDA #1 \ =return cmdline addr
 LDY #0 \ =part of above
 LDX #scratch \ =addr in zp
 JSR OSARGS
-.skiposargs
 :
 \ initialise direction to send
 LDA #DIR_SND
@@ -176,15 +168,15 @@ JMP done
 .badcmd
 JSR scratchrestore
 BRK
-EQUB 100 \ TODO
+EQUB 31 \ =Args
 EQUS "Bad args"
 EQUB 0
 :
 .badstn
 JSR scratchrestore
 BRK
-EQUB 100 \ TODO
-EQUS "Bad station"
+EQUB 208 \ =Bad station number
+EQUS "Bad station number"
 EQUB 0
 :
 .parsedec
@@ -335,7 +327,8 @@ TAX
 JMP loop
 :
 .sndcopyleaf
-\ copy leaf part of filename
+\ copy and print leaf part of
+\ filename
 TXA
 TAY
 LDX #0 \ pos in leaf
@@ -357,6 +350,15 @@ STA buffer+18,X
 \ store len on stack
 TXA
 PHA
+:
+\ print destination station
+LDA #ASC"-"
+JSR OSASCI
+LDA #ASC">"
+JSR OSASCI
+LDA #ASC"@"
+JSR OSASCI
+JSR printpeer
 \ print attributes
 JSR printinfo
 :
@@ -405,7 +407,7 @@ STA cblock+5
 \ never >64K so no need to do
 \ carry - zero top of both
 \ 32-bit addrs
-LDA #0
+LDA #&FF
 STA cblock+6 \ start+2
 STA cblock+7
 STA cblock+10 \ end+2
@@ -478,9 +480,10 @@ LDA #maxxfr DIV &100
 STA buffer+6
 \ zero top 2 bytes of 32-bit
 \ addrs
-LDA #0
+LDA #&FF
 STA buffer+3 \ buffer addr+2
 STA buffer+4
+LDA #0
 STA buffer+7 \ maxxfr addr+2
 STA buffer+8
 :
@@ -576,7 +579,7 @@ STA cblock+9
 LDA #(buffer+9) DIV &100
 STA cblock+10
 \ zero top of 32-bit addrs
-LDA #0
+LDA #&FF
 STA cblock+7 \ start addr+2
 STA cblock+8
 STA cblock+11 \ end addr+2
@@ -752,7 +755,7 @@ STA cblock+8
 LDA cblock+9
 ADC #0
 STA cblock+9
-LDA #0
+LDA #&FF
 STA cblock+10
 STA cblock+11
 :
@@ -761,7 +764,7 @@ LDA #(buffer+8) AND &FF
 STA cblock+4
 LDA #(buffer+8) DIV &100
 STA cblock+5
-LDA #0
+LDA #&FF
 STA cblock+6
 STA cblock+7
 :
@@ -897,7 +900,7 @@ STA cblock+9
 LDA #(buffer+29) DIV &100
 STA cblock+10
 \ zero pad top half of words
-LDA #0
+LDA #&FF
 STA cblock+7
 STA cblock+8
 STA cblock+11
@@ -1086,7 +1089,7 @@ STA cblock+8
 LDA #(buffer+9) DIV &100
 STA cblock+9
 \ blank top bytes
-LDA #0
+LDA #&FF
 STA cblock+6 \ start addr+2
 STA cblock+7
 STA cblock+10 \ end addr+2
@@ -1119,7 +1122,7 @@ STA cblock+9
 LDA #(buffer+8+5+maxxfr) DIV &100
 STA cblock+10
 \ blank top bytes
-LDA #0
+LDA #&FF
 STA cblock+7 \ start addr+2
 STA cblock+8
 STA cblock+11 \ end addr+2
@@ -1163,8 +1166,8 @@ JSR cmpdbl
 BEQ rcvchkblksndlen \ yes
 JSR cleanup
 BRK
-EQUB 218 \ =CFS Block
-EQUS "Block pos"
+EQUB 218 \ =CFS Block?
+EQUS "Block position"
 EQUB 0
 :
 .rcvchkblksndlen
@@ -1196,7 +1199,7 @@ JSR cmpdbl
 BPL rcvblksndok \ yes
 JSR cleanup
 BRK
-EQUB 100 \ TODO
+EQUB 218 \ =CFS Block?
 EQUS "Block oversize"
 EQUB 0
 :
@@ -1216,9 +1219,10 @@ STA buffer+5
 LDA cblock+6
 STA buffer+6
 \ blank top bytes
-LDA #0
+LDA #&FF
 STA buffer+3 \ start addr+2
 STA buffer+4
+LDA #0
 STA buffer+7 \ bytes+2
 STA buffer+8
 :
@@ -1229,8 +1233,8 @@ JSR OSGBPB
 BCC rcvupdcurrpos \ OK
 JSR cleanup
 BRK
-EQUB 100 \ TODO
-EQUS "Error writing file"
+EQUB 195 \ =Locked
+EQUS "Write error"
 EQUB 0
 :
 .rcvupdcurrpos
@@ -1867,6 +1871,8 @@ BNE loop \ Z<>0 => BRA
 .mindbldone
 RTS
 :
+.end
+:
 \ --- variable storage ---
 :
 .dir
@@ -1915,49 +1921,30 @@ EQUB 0
 EQUB 0
 EQUB 0
 :
-\ DEBUG ROUTINES
-:
-.wrreg
-PHA
-LDA #ASC"("
-JSR OSASCI
-:
-LDA #ASC"A"
-JSR OSASCI
-PLA
-PHA
-JSR wrbyte
-:
-LDA #ASC" "
-JSR OSASCI
-:
-LDA #ASC"X"
-JSR OSASCI
-TXA
-JSR wrbyte
-:
-LDA #ASC" "
-JSR OSASCI
-:
-LDA #ASC"Y"
-JSR OSASCI
-TYA
-JSR wrbyte
-:
-LDA #ASC")"
-JSR OSASCI
-PLA
-RTS
 ]
+:
+filename=P%
+P%=P%+80
+O%=O%+80
+:
+buffer=P%
+P%=P%+buflen
+O%=O%+buflen
+:
+cblock=P%
+P%=P%+13
+O%=O%+13
 :
 REM this test is shakey if the
 REM code block has overrun
 REM following variables
 IF P%-code%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
 NEXT
-PRINT "Code assembled at &";~code%;"+";~O%-code%;" for ";~target%
+:
+PRINT "Assembled at &";~code%;"+";~end-code%;" target &";~target%
 targethost%=&FFFF0000 OR target%
-save$="SAVE XF "+STR$~code%+"+"+STR$~(O%-code%)+" "+STR$~targethost%+" "+STR$~targethost%
+starthost%=&FFFF0000 OR start
+save$="SAVE XF "+STR$~code%+"+"+STR$~(O%-code%)+" "+STR$~targethost%+" "+STR$~starthost%
 PRINT "*";save$
-REM OSCLI(save$)
+OSCLI(save$)
 ENDPROC
