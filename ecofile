@@ -1,7 +1,7 @@
 *BASIC
 NEW
 AUTO
-REM>EcoxfrBas
+REM>EcoXfrAsm
 VERSION$="0.1 (2022-03-02)"
 :
 OSWORD=&FFF1
@@ -31,6 +31,7 @@ SCRATCH=&70
 STACK=&100
 TXTIMEOUT=500
 RXTIMEOUT=500
+MAXFNAMELEN=80
 :
 codebuf%=&1000
 DIM code% codebuf%
@@ -200,7 +201,7 @@ EQUB 0
 \   Y=start offset
 \ Exit  -
 \   A=num,C=no data,V=>255,
-\   SCRATCH+2 undefined.
+\   SCRATCH+2 overwritten.
 LDA #0
 STA SCRATCH+2
 .loop
@@ -1590,13 +1591,10 @@ RTS
 \   YX=cblock addr,
 \   cblock as OSWORD except +0
 \   will be initialised.
-\ Exit - X=0-success else err#
+\ Exit -
+\   X=0-success else err#
+\   SCRATCH+0/1 overwritten.
 :
-\ preserve scratch on stack
-LDA SCRATCH
-PHA
-LDA SCRATCH+1
-PHA
 \ XY address in scratch
 STX SCRATCH
 STY SCRATCH+1
@@ -1636,7 +1634,7 @@ BEQ tx_retry_check
 CPX #&42 \ not listening
 BEQ tx_retry_check
 \ either success or fatal error
-JMP scratch_restore \ JMP>RTS
+RTS
 :
 .tx_retry_check
 PHA
@@ -1645,7 +1643,7 @@ PLA
 BCC tx_start \ retry TX
 \ timed out
 TAX \ reply in X
-JMP scratch_restore \ JMP>RTS
+RTS
 :
 \ --- RX ---
 :
@@ -1658,25 +1656,22 @@ JMP scratch_restore \ JMP>RTS
 \   YX=cblock addr
 \   cblock as OSWORD except +0/1
 \   will be initialised.
-\ Exit- X[7]=success
+\ Exit-
+\   X[7]=success,
+\   SCRATCH+0/1 overwritten.
 :
-\ preserve scratch on stack
-LDA SCRATCH
-PHA
-LDA SCRATCH+1
-PHA
 \ XY address in scratch
 STX SCRATCH
 STY SCRATCH+1
 :
 LDA #0
 LDY #0
-STA (SCRATCH),Y \ for cblk num
+STA (SCRATCH),Y \ for cblock num
 LDA #&7F \ for control byte
 INY
 STA (SCRATCH),Y
 LDA #&11 \ =receive
-\ X=scratch, above
+\ X=SCRATCH, above
 LDY SCRATCH+1
 JSR OSWORD
 :
@@ -1712,7 +1707,7 @@ TAX
 LDA #&34 \ =delete RX block
 JSR OSBYTE
 LDX #0 \ !MSb => not received
-JMP scratch_restore
+RTS
 :
 .rx_read
 \ received message
@@ -1721,12 +1716,6 @@ LDX SCRATCH
 LDY SCRATCH+1
 JSR OSWORD
 LDX #&80 \ MSb => received
-:
-.scratch_restore
-PLA
-STA SCRATCH+1
-PLA
-STA SCRATCH
 RTS
 :
 .get_time
@@ -1797,7 +1786,7 @@ CLC
 \   AXY=undefined,CZN=as ADC,
 \   block+0-3 unchanged,
 \        +4-7=Q+P,
-\   Overwrites SCRATCH+0/1.
+\   SCRATCH+0/1 overwritten.
 STX SCRATCH
 STY SCRATCH+1
 LDY #4
@@ -1836,7 +1825,7 @@ SEC
 \   AXY undefined,CZN=as SBC,
 \   block+0-3=Q-P,
 \        +4-7 unchanged
-\   Overwrites SCRATCH+0/1.
+\   SCRATCH+0/1 overwritten.
 STX SCRATCH
 STY SCRATCH+1
 LDY #4
@@ -1971,19 +1960,13 @@ EQUB 0
 ]
 :
 REM filename buffer
-filename=P%
-P%=P%+80
-O%=O%+80
+filename=FNasmalloc(MAXFNAMELEN)
 :
 REM file/packet buffer
-buffer=P%
-P%=P%+buflen
-O%=O%+buflen
+buffer=FNasmalloc(buflen)
 :
 REM cblock buffer
-cblock=P%
-P%=P%+13
-O%=O%+13
+cblock=FNasmalloc(13)
 :
 REM this test is shakey if the
 REM code block has overrun
@@ -1998,3 +1981,10 @@ save$="SAVE EcoXfr "+STR$~code%+"+"+STR$~(end-target%)+" "+STR$~starthost%+" "+S
 PRINT "*";save$
 OSCLI(save$)
 ENDPROC
+:
+DEFFNasmalloc(bytes%)
+LOCAL addr%
+addr%=P%
+P%=P%+bytes%
+O%=O%+bytes%
+=addr%
