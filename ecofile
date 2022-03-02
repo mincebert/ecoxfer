@@ -28,7 +28,7 @@ cli_port=101
 :
 codebuf%=&1000
 DIM code% codebuf%
-target%=&2000
+target%=&2200
 scratch=&70
 stack=&100
 txtimeout=500
@@ -85,6 +85,11 @@ JSR OSARGS
 LDA #DIR_SND
 STA dir
 :
+\ blank peer station id
+LDX #0
+STX peer
+STX peer+1
+:
 \ skip leading spaces
 LDY #&FF
 .loop
@@ -93,11 +98,38 @@ LDA (scratch),Y
 CMP #ASC" "
 BEQ loop
 :
+CMP #ASC"*"
+BEQ anyrecv
+:
+CMP #13 \ =CR
+BNE parsestation
+\ no parameters - print help
+LDY #0
+.loop
+LDA helpmsg,Y
+CMP #0
+BEQ helpend
+JSR OSASCI
+INY
+JMP loop
+.helpend
+JSR scratchrestore
+RTS
+.helpmsg
+EQUS "Send: <stn. id.> <filename>"
+EQUB 13
+EQUS "Recv: (<stn. id.>|*) (=<new filename>)"
+EQUB 13
+EQUB 0
+:
+.anyrecv
+\ peer station=* - move on to
+\ receive filename
+INY
+JMP parsefname
+:
+.parsestation
 \ parse station/network number
-LDA #0 \ start by blanking
-STA peer
-STA peer+1
-\ parse decimal
 JSR parsedec
 BCS parsefname \ => no number
 BVS badstn \ => outside 0-255
@@ -158,7 +190,7 @@ CMP #DIR_RCV
 BEQ dorcv
 JSR send
 .done
-JSR scratchrestore \ JMP>RTS
+JSR scratchrestore
 RTS
 :
 .dorcv
@@ -1933,17 +1965,19 @@ EQUB 0
 EQUB 0
 EQUB 0
 EQUB 0
-:
 ]
 :
+REM filename buffer
 filename=P%
 P%=P%+80
 O%=O%+80
 :
+REM file/packet buffer
 buffer=P%
 P%=P%+buflen
 O%=O%+buflen
 :
+REM cblock buffer
 cblock=P%
 P%=P%+13
 O%=O%+13
@@ -1951,13 +1985,13 @@ O%=O%+13
 REM this test is shakey if the
 REM code block has overrun
 REM following variables
-IF P%-code%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
+IF P%-target%>codebuf% THEN PRINT "Code overran target buffer: ";P%-code%;">";codebuf%;" bytes":STOP
 NEXT
 :
-PRINT "Assembled at &";~code%;"+";~end-code%;" target &";~target%
+PRINT "Assembled &";~target%;"+";~end-target%;"/";~P%-target%;" @ &";~code%
 targethost%=&FFFF0000 OR target%
 starthost%=&FFFF0000 OR start
-save$="SAVE XF "+STR$~code%+"+"+STR$~(O%-code%)+" "+STR$~targethost%+" "+STR$~starthost%
+save$="SAVE XF "+STR$~code%+"+"+STR$~(end-target%)+" "+STR$~targethost%+" "+STR$~starthost%
 PRINT "*";save$
 OSCLI(save$)
 ENDPROC
