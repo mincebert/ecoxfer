@@ -395,9 +395,9 @@ LDA #ASC"-"
 JSR OSASCI
 LDA #ASC">"
 JSR OSASCI
-LDA #ASC"@"
-JSR OSASCI
 JSR printpeer
+LDA #ASC":"
+JSR OSASCI
 \ print attributes
 JSR printinfo
 :
@@ -921,6 +921,26 @@ JMP sndxfrloop
 \     (empty=use sent name)
 \ Exit - AXY=undefined
 :
+\ print receive name+station
+:
+LDY #0
+.loop
+LDA filename,Y
+CMP #13
+BEQ rcvprintpeer
+JSR OSASCI
+INY
+JMP loop
+:
+.rcvprintpeer
+LDA #ASC"<"
+JSR OSASCI
+LDA #ASC"-"
+JSR OSASCI
+JSR printpeer
+LDA #ASC":"
+JSR OSASCI
+:
 \ build RX cblock
 :
 LDA #srv_port
@@ -980,20 +1000,32 @@ STA peer
 LDA cblock+4
 STA peer+1
 :
-\ addr of received filename
-\ (may override later)
+\ store address of override
+\ filename for OSFILE
+LDA #filename AND &FF
+STA buffer
+LDA #filename DIV &100
+STA buffer+1
+:
+\ check if overriding filename
+LDA filename
+CMP #13 \ =CR
+BNE rcvcheckname \ no
+\ replace OSFILE param with addr
+\ of received filename
 LDA #(buffer+18) AND &FF
 STA buffer
 LDA #(buffer+18) DIV &100
 STA buffer+1
 :
+.rcvcheckname
 \ check name is (vaguely) valid
 \ and print
 LDY #0
 .loop
 LDA buffer+18,Y
 CMP #13
-BEQ rcvprintpeer
+BEQ rcvprintinfo
 CMP #32
 BCC rcvinvalidname
 CMP #127
@@ -1007,35 +1039,6 @@ BRK
 EQUB 219 \ =CFS File?
 EQUS "Invalid name"
 EQUB 0
-:
-.rcvprintpeer
-LDA #ASC"@"
-JSR OSASCI
-JSR printpeer
-:
-\ check if overriding filename
-LDA filename
-CMP #13 \ =CR
-BEQ rcvprintinfo \ no
-\ yes - print override
-LDA #ASC"-"
-JSR OSASCI
-LDA #ASC">"
-JSR OSASCI
-LDA #filename AND &FF
-STA scratch
-STA buffer \ for OSFILE
-LDA #filename DIV &100
-STA scratch+1
-STA buffer+1
-LDY #0
-.loop
-LDA (scratch),Y
-CMP #13
-BEQ rcvprintinfo
-JSR OSASCI
-INY
-JMP loop
 :
 .rcvprintinfo
 JSR printinfo
