@@ -2,6 +2,7 @@
 NEW
 AUTO
 REM>EcoxfrBas
+VERSION$="0.1 (2022-03-02)"
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -23,40 +24,23 @@ OP_BLKREQ=&81
 OP_BLKSND=&02
 :
 REM econet ports
-srv_port=100
-cli_port=101
+SRV_PORT=77
+CLI_PORT=78
+:
+SCRATCH=&70
+STACK=&100
+TXTIMEOUT=500
+RXTIMEOUT=500
 :
 codebuf%=&1000
 DIM code% codebuf%
 target%=&2200
-scratch=&70
-stack=&100
-txtimeout=500
-rxtimeout=500
 :
 maxxfr=256:REM in single packet
 buflen=maxxfr+13:REM +13 for OSGBPB param block
 :
 PROCassemble
-REM PROCtestasmsend("T1",81)
-REM PROCtestasmrecv("T3",81)
-STOP
-:
-DEFPROCtestasmsend(filename$,station%)
-$filename=filename$
-peer?0=station% AND &FF
-peer?1=station% DIV &100
-PRINT "Sending..."
-PRINT ~USR(send)
-ENDPROC
-:
-DEFPROCtestasmrecv(filename$,station%)
-$filename=filename$
-peer?0=station% AND &FF
-peer?1=station% DIV &100
-PRINT "Receiving..."
-PRINT ~USR(receive)
-ENDPROC
+END
 :
 DEFPROCassemble
 FOR pass%=0 TO 1
@@ -71,10 +55,10 @@ EQUB 0
 .start
 \ --- PARSE COMMAND LINE ---
 :
-\ save scratch+0-4 to stack
+\ save SCRATCH+0-4 to stack
 LDY #0
 .loop
-LDA scratch,Y
+LDA SCRATCH,Y
 PHA
 INY
 CPY #4
@@ -82,7 +66,7 @@ BNE loop
 :
 LDA #1 \ =return cmdline addr
 LDY #0 \ =part of above
-LDX #scratch \ =addr in zp
+LDX #SCRATCH \ =addr in zp
 JSR OSARGS
 :
 \ initialise direction to send
@@ -98,7 +82,7 @@ STX peer+1
 LDY #&FF
 .loop
 INY
-LDA (scratch),Y
+LDA (SCRATCH),Y
 CMP #ASC" "
 BEQ loop
 :
@@ -119,12 +103,6 @@ JMP loop
 .helpend
 JSR scratchrestore
 RTS
-.helpmsg
-EQUS "Send: <stn. id.> <filename>"
-EQUB 13
-EQUS "Recv: <stn. id.>|* (=<new filename>)"
-EQUB 13
-EQUB 0
 :
 .anyrecv
 \ peer station=* - move on to
@@ -140,7 +118,7 @@ BVS badstn \ => outside 0-255
 STA peer \ assume .stn
 :
 \ check if "." => net.stn
-LDA (scratch),Y
+LDA (SCRATCH),Y
 CMP #ASC"."
 BNE parsefname
 \ number was actually network
@@ -158,13 +136,13 @@ STA peer \ .stn
 DEY
 .loop
 INY
-LDA (scratch),Y
+LDA (SCRATCH),Y
 CMP #ASC" "
 BEQ loop
 :
 \ if first char of filename is
 \ "=" then receving and renaming
-LDA (scratch),Y
+LDA (SCRATCH),Y
 CMP #ASC"="
 BNE copyfname
 INY
@@ -175,7 +153,7 @@ STA dir
 \ copy filename
 LDX #0
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 STA filename,X
 INY
 INX
@@ -218,40 +196,40 @@ EQUB 0
 .parsedec
 \ Parse one byte decimal number.
 \ Entry -
-\   (scratch)=addr of str,
+\   (SCRATCH)=addr of str,
 \   Y=start offset
 \ Exit  -
 \   A=num,C=no data,V=>255,
-\   scratch+2 undefined.
+\   SCRATCH+2 undefined.
 LDA #0
-STA scratch+2
+STA SCRATCH+2
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 JSR parsedecdig
 BCS parsedecdone
 \ store parsed digit
 TAX
 \ check total will not overflow
-LDA scratch+2
+LDA SCRATCH+2
 CMP #26 \ >=26 *10 => overflow
 BCS parsedecover
 \ multiple total so far by 10
 ASL A
-STA scratch+2
+STA SCRATCH+2
 ASL A
 ASL A
-ADC scratch+2 \ we know C=0
-STA scratch+2
+ADC SCRATCH+2 \ we know C=0
+STA SCRATCH+2
 \ add this digit to total
 TXA
-ADC scratch+2 \ we know C=0
+ADC SCRATCH+2 \ we know C=0
 BCS parsedecover \ >=255
-STA scratch+2
+STA SCRATCH+2
 INY
 JMP loop
 :
 .parsedecdone
-LDA scratch+2
+LDA SCRATCH+2
 CPY #0
 BEQ parsedecerr \ =no digits
 CLC \ =parsed digits
@@ -303,19 +281,28 @@ PLA
 TAX
 \ restore scratch
 PLA
-STA scratch+3
+STA SCRATCH+3
 PLA
-STA scratch+2
+STA SCRATCH+2
 PLA
-STA scratch+1
+STA SCRATCH+1
 PLA
-STA scratch
+STA SCRATCH
 \ push my return addr
 TXA
 PHA
 TYA
 PHA
 RTS
+:
+.helpmsg
+EQUS "Econet File Transfer "+VERSION$
+EQUB 13
+EQUS "  Send - <stn. id.> <filename>"
+EQUB 13
+EQUS "  Recv - <stn. id.>|* (=<new filename>)"
+EQUB 13
+EQUB 0
 :
 \ --- SEND ---
 :
@@ -351,15 +338,15 @@ EQUB 0
 \ transmission
 :
 LDA #filename AND &FF
-STA scratch
+STA SCRATCH
 LDA #filename DIV &100
-STA scratch+1
+STA SCRATCH+1
 :
 \ find end of filename
 LDX #0 \ index after last dot
 LDY #0 \ current index
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 INY
 CMP #13 \ =CR
 BEQ sndcopyleaf
@@ -376,7 +363,7 @@ TXA
 TAY
 LDX #0 \ pos in leaf
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 STA buffer+18,X
 INX
 CMP #13 \ =CR
@@ -415,7 +402,7 @@ JSR printinfo
 :
 LDA #OP_FILEINFO
 STA buffer
-LDA #cli_port
+LDA #CLI_PORT
 STA buffer+1
 :
 \ build tx cblock
@@ -434,7 +421,7 @@ STA cblock+9
 \ top bytes blanked below
 :
 \ store dest port
-LDA #srv_port
+LDA #SRV_PORT
 STA cblock+1
 \ copy dest addr
 LDA peer
@@ -601,7 +588,7 @@ EQUB 13 \ =CR
 :
 .sndwaitblkreq
 \ set up rx cblock
-LDA #cli_port
+LDA #CLI_PORT
 STA cblock+2
 \ copy sender addr
 LDA peer
@@ -835,7 +822,7 @@ DEY
 BPL loop
 :
 \ store dest port
-LDA #srv_port
+LDA #SRV_PORT
 STA cblock+1
 \ copy dest addr
 LDA peer
@@ -869,36 +856,36 @@ JMP sndxfrloop
 .sndshuffbuff256
 \ calculate the buffer src addr
 \ (start after header + bytes
-\ transferred) into scratch+0/1
+\ transferred) into SCRATCH+0/1
 LDA #ASC":":JSR OSASCI
 CLC
 LDA #(buffer+13) AND &FF
 ADC buffer+5
-STA scratch
+STA SCRATCH
 LDA #(buffer+13) DIV &100
 ADC buffer+6
-STA scratch+1
+STA SCRATCH+1
 :
 \ set the buffer dst addr
 \ (start after header) in
-\ scratch+2/3
+\ SCRATCH+2/3
 LDA #(buffer+13) AND &FF
-STA scratch+2
+STA SCRATCH+2
 LDA #(buffer+13) DIV &100
-STA scratch+3
+STA SCRATCH+3
 :
 \ move the blocks of 256 bytes
-\ (scratch+0/1)->(scratch+2/3)
+\ (SCRATCH+0/1)->(SCRATCH+2/3)
 LDX buffused+1
 BEQ shuffbuff1
 LDY #0
 .loop
-LDA (scratch),Y
-STA (scratch+2),Y
+LDA (SCRATCH),Y
+STA (SCRATCH+2),Y
 INY
 BNE loop
-INC scratch+1
-INC scratch+3
+INC SCRATCH+1
+INC SCRATCH+3
 DEX
 BNE loop
 :
@@ -909,8 +896,8 @@ LDX buffused
 BEQ sndjmpxfrloop \ no
 LDY #0
 .loop
-LDA (scratch),Y
-STA (scratch+2),Y
+LDA (SCRATCH),Y
+STA (SCRATCH+2),Y
 INY
 DEX
 BNE loop
@@ -956,7 +943,7 @@ JSR OSASCI
 :
 \ build RX cblock
 :
-LDA #srv_port
+LDA #SRV_PORT
 STA cblock+2
 LDA peer
 STA cblock+3
@@ -1164,7 +1151,7 @@ JMP neterror
 :
 .rcvgetblksnd
 \ build block send rx cblock
-LDA #srv_port
+LDA #SRV_PORT
 STA cblock+2
 LDA peer
 STA cblock+3
@@ -1471,18 +1458,18 @@ LDA #0
 \ Exit -
 \   AXY undefined
 LSR A \ A->C
-LDA scratch
+LDA SCRATCH
 PHA
-LDA scratch+1
+LDA SCRATCH+1
 PHA
-STX scratch
-STY scratch+1
+STX SCRATCH
+STY SCRATCH+1
 LDA #0 \ recover C->A
 ROL A
 TAX \ leading 0s flag
 LDY #3 \ byte #; start at MSB
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 BNE wrdblhex \ <>0 - write
 CPX #0 \ leading zeroes?
 BNE wrdblhex \ no - write
@@ -1495,9 +1482,9 @@ INX \ set not in leading zeros
 DEY \ move to next byte MSB->LSB
 BPL loop
 PLA
-STA scratch+1
+STA SCRATCH+1
 PLA
-STA scratch
+STA SCRATCH
 RTS
 :
 .wrbyte
@@ -1536,7 +1523,7 @@ PHA
 TYA
 PHA
 TSX
-LDA stack+3,X
+LDA STACK+3,X
 JSR wrdec
 PLA
 TAY
@@ -1606,18 +1593,18 @@ RTS
 \ Exit - X=0-success else err#
 :
 \ preserve scratch on stack
-LDA scratch
+LDA SCRATCH
 PHA
-LDA scratch+1
+LDA SCRATCH+1
 PHA
 \ XY address in scratch
-STX scratch
-STY scratch+1
+STX SCRATCH
+STY SCRATCH+1
 :
 \ calculate timeout
-LDA #txtimeout AND &FF
+LDA #TXTIMEOUT AND &FF
 STA timeout
-LDA #(txtimeout AND &FF00) DIV &100
+LDA #(TXTIMEOUT AND &FF00) DIV &100
 STA timeout+1
 \ timeout < 655.35s so +2/3/4=0
 LDA #0
@@ -1629,13 +1616,13 @@ JSR set_timeout
 .tx_start
 LDA #&80 \ LSb=not started
 LDY #0
-STA (scratch),Y
+STA (SCRATCH),Y
 LDA #&10 \ =transmit
-LDX scratch
-LDY scratch+1
+LDX SCRATCH
+LDY SCRATCH+1
 JSR OSWORD
 LDY #0
-LDA (scratch),Y
+LDA (SCRATCH),Y
 BEQ tx_start
 :
 .tx_poll
@@ -1674,29 +1661,29 @@ JMP scratch_restore \ JMP>RTS
 \ Exit- X[7]=success
 :
 \ preserve scratch on stack
-LDA scratch
+LDA SCRATCH
 PHA
-LDA scratch+1
+LDA SCRATCH+1
 PHA
 \ XY address in scratch
-STX scratch
-STY scratch+1
+STX SCRATCH
+STY SCRATCH+1
 :
 LDA #0
 LDY #0
-STA (scratch),Y \ for cblk num
+STA (SCRATCH),Y \ for cblk num
 LDA #&7F \ for control byte
 INY
-STA (scratch),Y
+STA (SCRATCH),Y
 LDA #&11 \ =receive
 \ X=scratch, above
-LDY scratch+1
+LDY SCRATCH+1
 JSR OSWORD
 :
 \ calculate timeout
-LDA #rxtimeout AND &FF
+LDA #RXTIMEOUT AND &FF
 STA timeout
-LDA #(rxtimeout AND &FF00) DIV &100
+LDA #(RXTIMEOUT AND &FF00) DIV &100
 STA timeout+1
 \ timeout < 655.35s so +2/3/4=0
 LDA #0
@@ -1708,7 +1695,7 @@ JSR set_timeout
 .rx_poll
 \ poll for reception
 LDY #0
-LDA (scratch),Y
+LDA (SCRATCH),Y
 TAX
 LDA #&33 \ =poll receive
 JSR OSBYTE
@@ -1720,7 +1707,7 @@ JSR chk_timeout
 BCC rx_poll \ retry poll
 \ timed out
 LDY #0
-LDA (scratch),Y
+LDA (SCRATCH),Y
 TAX
 LDA #&34 \ =delete RX block
 JSR OSBYTE
@@ -1730,16 +1717,16 @@ JMP scratch_restore
 .rx_read
 \ received message
 LDA #&11 \ =read RX block
-LDX scratch
-LDY scratch+1
+LDX SCRATCH
+LDY SCRATCH+1
 JSR OSWORD
 LDX #&80 \ MSb => received
 :
 .scratch_restore
 PLA
-STA scratch+1
+STA SCRATCH+1
 PLA
-STA scratch
+STA SCRATCH
 RTS
 :
 .get_time
@@ -1810,23 +1797,23 @@ CLC
 \   AXY=undefined,CZN=as ADC,
 \   block+0-3 unchanged,
 \        +4-7=Q+P,
-\   Overwrites scratch+0/1.
-STX scratch
-STY scratch+1
+\   Overwrites SCRATCH+0/1.
+STX SCRATCH
+STY SCRATCH+1
 LDY #4
 .loop
-LDA (scratch),Y get byte in Q
+LDA (SCRATCH),Y get byte in Q
 DEY \ move to same byte in P
 DEY
 DEY
 DEY
-ADC (scratch),Y
+ADC (SCRATCH),Y
 PHP
 INY \ back to same byte in Q
 INY
 INY
 INY
-STA (scratch),Y
+STA (SCRATCH),Y
 CPY #7 \ finished
 BEQ adcdbldone
 INY \ move to next byte in Q
@@ -1849,18 +1836,18 @@ SEC
 \   AXY undefined,CZN=as SBC,
 \   block+0-3=Q-P,
 \        +4-7 unchanged
-\   Overwrites scratch+0/1.
-STX scratch
-STY scratch+1
+\   Overwrites SCRATCH+0/1.
+STX SCRATCH
+STY SCRATCH+1
 LDY #4
 .loop
-LDA (scratch),Y \ get byte in Q
+LDA (SCRATCH),Y \ get byte in Q
 DEY \ move to same byte in P
 DEY
 DEY
 DEY
-SBC (scratch),Y
-STA (scratch),Y
+SBC (SCRATCH),Y
+STA (SCRATCH),Y
 PHP \ flags for iter or return
 CPY #3 \ finished
 BEQ sbcdbldone
@@ -1882,26 +1869,26 @@ RTS
 \   block+0-3=P,+4-7=Q
 \ Exit -
 \   AXY undefined,CZN=as CMP
-\   Overwrites scratch+0/1.
-STX scratch
-STY scratch+1
+\   Overwrites SCRATCH+0/1.
+STX SCRATCH
+STY SCRATCH+1
 CLC
 LDY #7
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 DEY
 DEY
 DEY
 DEY
 BEQ cmpdbllast
-CMP (scratch),Y
+CMP (SCRATCH),Y
 BNE cmpdbldone
 INY
 INY
 INY
 JMP loop
 .cmpdbllast
-CMP (scratch),Y
+CMP (SCRATCH),Y
 .cmpdbldone
 RTS
 :
@@ -1918,12 +1905,12 @@ JSR cmpdbl
 BCS mindbldone
 LDY #7
 .loop
-LDA (scratch),Y
+LDA (SCRATCH),Y
 DEY \ move to same byte in P
 DEY
 DEY
 DEY
-STA (scratch),Y
+STA (SCRATCH),Y
 BEQ mindbldone
 INY
 INY
