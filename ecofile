@@ -361,9 +361,12 @@ TAX
 JMP loop
 :
 .sndcopyleaf
+TXA
+PHA
+JSR printme
 \ copy and print leaf part of
 \ filename
-TXA
+PLA
 TAY
 LDX #0 \ pos in leaf
 .loop
@@ -918,6 +921,7 @@ JMP sndxfrloop
 :
 \ print receive name+station
 :
+JSR printme
 LDY #0
 .loop
 LDA filename,Y
@@ -1418,6 +1422,24 @@ LDX #currpos AND &FF
 LDY #currpos DIV &100
 JSR wrdbl
 LDA #ASC" "
+JMP OSASCI \ JMP>RTS
+:
+.printme
+\ Print my station number
+\ followed by colon.
+:
+\ get station number
+LDA #8 \ =read station number
+STA buffer
+LDA #&13 \ =station information
+LDX #buffer AND &FF
+LDY #buffer DIV &100
+JSR OSWORD
+:
+\ print station number
+LDA buffer+1
+JSR wrdec
+LDA #ASC":"
 JMP OSASCI \ JMP>RTS
 :
 .printpeer
