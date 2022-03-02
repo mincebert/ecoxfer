@@ -2,7 +2,8 @@
 NEW
 AUTO
 REM>EcoXfrAsm
-VERSION$="0.1 (2022-03-02)"
+REM Robert Franklin <rcf@mince.net>
+VERSION$="1.0 (2022-03-02)"
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -29,9 +30,9 @@ CLI_PORT=78
 :
 SCRATCH=&70
 STACK=&100
-TXTIMEOUT=500
+TXTIMEOUT=500:REM in cs
 RXTIMEOUT=500
-MAXFNAMELEN=80
+MAXFNAMELEN=128:REM inc. CR
 :
 codebuf%=&1000
 DIM code% codebuf%
@@ -44,10 +45,10 @@ PROCassemble
 END
 :
 DEFPROCassemble
-FOR pass%=0 TO 1
+LOCAL opt%
+FOR opt%=4 TO 6 STEP 2
 P%=target%
 O%=code%
-opt%=4+pass%*2
 [ OPT opt%
 .version
 EQUS "v0.1 (2022-03-02)"
@@ -154,6 +155,8 @@ STA dir
 \ copy filename
 LDX #0
 .loop
+CPX #MAXFNAMELEN \ inc. CR
+BCS badcmd
 LDA (SCRATCH),Y
 STA filename,X
 INY
@@ -191,7 +194,7 @@ EQUB 0
 JSR scratchrestore
 BRK
 EQUB 208 \ =Bad station number
-EQUS "Bad station number"
+EQUS "Bad station id"
 EQUB 0
 :
 .parsedec
