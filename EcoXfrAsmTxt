@@ -394,8 +394,6 @@ JSR OSASCI
 LDA #ASC">"
 JSR OSASCI
 JSR printpeer
-LDA #ASC":"
-JSR OSASCI
 \ print attributes
 JSR printinfo
 :
@@ -939,16 +937,16 @@ JSR OSASCI
 \ print * instead of 0 for any
 LDA peer
 ORA peer+1
-BEQ rcvpeerstar
+BEQ rcvpeerwild
 JSR printpeer
-JMP rcvpeercolon
-.rcvpeerstar
+JMP rcvbuildrxinfo
+.rcvpeerwild
 LDA #ASC"*"
 JSR OSASCI
-.rcvpeercolon
 LDA #ASC":"
 JSR OSASCI
 :
+.rcvbuildrxinfo
 \ build RX cblock
 :
 LDA #SRV_PORT
@@ -1000,6 +998,10 @@ EQUS "Not file info"
 EQUB 0
 :
 .rcvsaveinfo
+\ if peer was * record this
+LDA peer
+ORA peer+1
+TAX
 \ save peer details
 LDA buffer+1
 STA port
@@ -1008,6 +1010,15 @@ STA peer
 LDA cblock+4
 STA peer+1
 :
+CPX #0
+BNE rcvstorefname
+\ backspace over "*-colon"
+LDA #8
+JSR OSASCI
+JSR OSASCI
+JSR printpeer
+:
+.rcvstorefname
 \ store address of override
 \ filename for OSFILE
 LDA #filename AND &FF
@@ -1443,7 +1454,7 @@ LDA #ASC":"
 JMP OSASCI \ JMP>RTS
 :
 .printpeer
-\ Print peer address.
+\ Print peer address + colon.
 LDA peer+1
 BEQ printpeerskipnet
 JSR wrdec
@@ -1451,7 +1462,9 @@ LDA #ASC"."
 JSR OSASCI
 .printpeerskipnet
 LDA peer
-JMP wrdec \ JMP>RTS
+JSR wrdec
+LDA #ASC":"
+JMP OSASCI \ JMP>RTS
 :
 .initfilemeta
 \ Store length from OSFILE param
