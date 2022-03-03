@@ -3,7 +3,7 @@ NEW
 AUTO
 REM>EcoXfrAsm
 REM Robert Franklin <rcf@mince.net>
-VERSION$="1.0 (2022-03-02)"
+VERSION$="1.0 (2022-03-03)"
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -50,10 +50,6 @@ FOR opt%=4 TO 6 STEP 2
 P%=target%
 O%=code%
 [ OPT opt%
-.version
-EQUS "v0.1 (2022-03-02)"
-EQUB 0
-:
 .start
 \ --- PARSE COMMAND LINE ---
 :
