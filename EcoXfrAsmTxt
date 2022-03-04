@@ -4,8 +4,6 @@ AUTO
 REM > EcoXfrAsm
 REM Robert Franklin <rcf@mince.net>
 VERSION$="1.0 (2022-03-03)"
-REM JGH: Corrected error numbers, see beebwiki.mdfs.net/System_error_messages
-REM JGH: Correct zero page workspace location
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -30,7 +28,7 @@ REM econet ports
 SRV_PORT=77
 CLI_PORT=78
 :
-SCRATCH=&A8:REM *Command use *Command workspace
+SCRATCH=&A8:REM use *cmd workspace
 STACK=&100
 TXTIMEOUT=500:REM in cs
 RXTIMEOUT=500
@@ -54,16 +52,6 @@ O%=code%
 [ OPT opt%
 .start
 \ --- PARSE COMMAND LINE ---
-:
-\\ save SCRATCH+0-4 to stack
-\\ not needed, *command uses *command workspace
-\LDY #0
-\.loop
-\LDA SCRATCH,Y
-\PHA
-\INY
-\CPY #4
-\BNE loop
 :
 LDA #1 \ =return cmdline addr
 LDY #0 \ =part of above
@@ -102,7 +90,6 @@ JSR OSASCI
 INY
 JMP loop
 .helpend
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 RTS
 :
 .anyrecv
@@ -175,7 +162,6 @@ CMP #DIR_RCV
 BEQ dorcv
 JSR send
 .done1
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 RTS
 :
 .dorcv
@@ -183,14 +169,12 @@ JSR receive
 JMP done1
 :
 .badcmd
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 BRK
-EQUB 253 \ Bad string
+EQUB 253 \ =Bad string
 EQUS "Filename too long"
 EQUB 0
 :
 .badstn
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 BRK
 EQUB 208 \ =Bad station number
 EQUS "Bad station id"
@@ -252,7 +236,7 @@ RTS
 \ return overflow with V=1,C=0
 LDA #&7F
 ADC #1 \ => V=1,C=0
-\ BIT P%+3 would set V from opcode for RTS
+\ BIT P%+3 would set V from RTS opcode
 RTS
 :
 .parsedecdig
@@ -268,37 +252,6 @@ RTS
 SEC \ =not digit
 .parsedecdiginv
 RTS
-:
-\.scratchrestore
-\\ not needed, *command uses *command workspace
-\\ Restore scratch bytes assuming
-\\ they're at the top of the
-\\ stack, underneath the return
-\\ address added by a JSR.
-\\ Entry- stack as above
-\\ Exit -
-\\   AXY undefined,
-\\   Return addr + scratch bytes
-\\   removed from stack.
-\PLA
-\TAY
-\PLA
-\TAX
-\ restore scratch
-\PLA
-\STA SCRATCH+3
-\PLA
-\STA SCRATCH+2
-\PLA
-\STA SCRATCH+1
-\PLA
-\STA SCRATCH
-\ push my return addr
-\TXA
-\PHA
-\TYA
-\PHA
-\RTS
 :
 .helpmsg
 EQUS "Econet File Transfer "+VERSION$
@@ -331,8 +284,7 @@ JSR OSFILE
 CMP #1 \ =file found
 BEQ sndfindleaf
 \ not found
-\JSR scratchrestore:\ not needed, *command uses *command workspace
-.errNotFound
+.errnotfound
 BRK
 EQUB 214 \ =Not found
 EQUS "File not found"
@@ -454,7 +406,7 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ sndopenin \ X=0 - success
+BEQ sndopenin \ X=0-success
 JMP neterror
 :
 \ PREPARE FOR TX FILE BLOCKS
@@ -468,12 +420,7 @@ STA fhandle
 TAX
 BNE sndinitread
 \ open in error
-\JSR scratchrestore:\ not needed, *command uses *command workspace
-JMP errNotFound
-\BRK
-\EQUB 214 \ =Not found
-\EQUS "Not found"
-\EQUB 0
+JMP errnotfound
 :
 .sndinitread
 JSR initfilemeta
@@ -576,7 +523,7 @@ BNE sndwaitblkreq \ <>0=more
 DEY
 BPL loop
 :
-.done2 \\ *** label used twice ***
+.done2
 \ finished transfer (also use
 \ for receive)
 :
@@ -630,7 +577,7 @@ BMI sndchkblkreqpkt \ X[7]=OK
 \ no block request received
 JSR cleanup
 BRK
-EQUB 160+5 \ =no scout
+EQUB 160+5 \ =No reply from station
 EQUS "No reply from dest"
 EQUB 0
 :
@@ -639,10 +586,12 @@ EQUB 0
 LDA buffer
 CMP #OP_BLKREQ
 BEQ sndblkreqrcv
-\ incorrect packet operation
+\ incorrect packet operation - data
+\ or other block rxd when header
+\ expected
 JSR cleanup
 BRK
-EQUB 217 \ =CFS Header? - data or other block rxd when header expected
+EQUB 217 \ =CFS Header?
 EQUS "Not a block send"
 EQUB 0
 :
@@ -732,10 +681,11 @@ LDX #(buffer+1) AND &FF
 LDY #(buffer+1) DIV &100
 JSR cmpdbl
 BEQ sndupdcurrpos \ =same
-\ offset mismatch
+\ offset mismatch - block num not one
+\ expected
 JSR cleanup
 BRK
-EQUB 218 \ =CFS Block? BlockNo not the one expected
+EQUB 218 \ =CFS Block?
 EQUS "Block out of sequence"
 EQUB 0
 :
@@ -842,7 +792,7 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ sndshuffchk \ X=0 - success
+BEQ sndshuffchk \ X=0-success
 JMP neterror
 :
 .sndshuffchk
@@ -984,7 +934,7 @@ JSR rx
 TXA
 BMI rcvchkinfopkt \ X[7]=OK
 BRK
-EQUB 160+5 \ =No scout
+EQUB 160+5 \ =No reply from station
 EQUS "No transmission received"
 EQUB 0
 :
@@ -994,9 +944,8 @@ LDA buffer
 CMP #OP_FILEINFO
 BEQ rcvsaveinfo
 \ incorrect packet operation
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 BRK
-EQUB 217 \ =CFS Header? - data or other block rxd when header expected
+EQUB 217 \ =CFS Header?
 EQUS "Not file info block"
 EQUB 0
 :
@@ -1091,7 +1040,6 @@ LDY buffer+1
 JSR OSFIND
 TAY
 BNE rcvopenoutok
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 BRK
 EQUB 193 \ =File not writable
 EQUS "Can't save file"
@@ -1168,7 +1116,7 @@ LDX #cblock AND &FF
 LDY #cblock DIV &100
 JSR tx
 TXA
-BEQ rcvgetblksnd \ X=0 - success
+BEQ rcvgetblksnd \ X=0-success
 JMP neterror
 :
 .rcvgetblksnd
@@ -1204,7 +1152,7 @@ TXA
 BMI rcvchkblksndpkt \ X[7]=OK
 JSR cleanup
 BRK
-EQUB 160+2 \ =No scout
+EQUB 160+2 \ =Station not listening
 EQUS "Block send timeout"
 EQUB 0
 :
@@ -1213,10 +1161,11 @@ EQUB 0
 LDA buffer+8
 CMP #OP_BLKSND
 BEQ rcvchkblksndpos
-\ incorrect packet operation
+\ incorrect packet operation -
+\ expecting header block
 JSR cleanup
 BRK
-EQUB 217 \ =CFS Header? Was expecting header block
+EQUB 217 \ =CFS Header?
 EQUS "Block send?"
 EQUB 0
 :
@@ -1233,9 +1182,10 @@ LDX #(buffer+5) AND &FF
 LDY #(buffer+5) DIV &100
 JSR cmpdbl
 BEQ rcvchkblksndlen \ yes
+\ not expected block number
 JSR cleanup
 BRK
-EQUB 218 \ =CFS Block? - Not expected block number
+EQUB 218 \ =CFS Block?
 EQUS "Block out of sequence"
 EQUB 0
 :
@@ -1268,7 +1218,7 @@ JSR cmpdbl
 BCS rcvblksndok \ yes
 JSR cleanup
 BRK
-EQUB 169 \ =Block too big
+EQUB 160+9 \ =Too long
 EQUS "Block too big"
 EQUB 0
 :
@@ -1357,7 +1307,6 @@ RTS
 \ calculate offset of this error
 \ in the message addr table
 STX errorcode
-\JSR scratchrestore:\ not needed, *command uses *command workspace
 LDX errorcode
 CPX #&40
 BEQ linejamerr
@@ -1370,32 +1319,32 @@ BEQ noclockerr
 CPX #&44
 BEQ badtxblkerr
 BRK
-EQUB 160+1
+EQUB 160+1 \ =Net error
 EQUS "Unknown net error"
 EQUB 0
 .linejamerr
 BRK
-EQUB 160+0
+EQUB 160+0 \ =Line jammed
 EQUS "Line jammed"
 EQUB 0
 .handshkerr
 BRK
-EQUB 160+1
+EQUB 160+1 \ =Net error
 EQUS "Net error"
 EQUB 0
 .noscouterr
 BRK
-EQUB 160+2
+EQUB 160+2 \ =Station not listening
 EQUS "Not listening"
 EQUB 0
 .noclockerr
 BRK
-EQUB 160+3
+EQUB 160+3 \ =No clock
 EQUS "No clock"
 EQUB 0
 .badtxblkerr
 BRK
-EQUB 160+4
+EQUB 160+4 \ =Station not present
 EQUS "Bad control block"
 EQUB 0
 :
