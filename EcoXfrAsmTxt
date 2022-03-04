@@ -161,12 +161,12 @@ LDA dir
 CMP #DIR_RCV
 BEQ dorcv
 JSR send
-.done1
+.done
 RTS
 :
 .dorcv
 JSR receive
-JMP done1
+JMP done
 :
 .badcmd
 BRK
@@ -523,7 +523,7 @@ BNE sndwaitblkreq \ <>0=more
 DEY
 BPL loop
 :
-.done2
+.doneclose
 \ finished transfer (also use
 \ for receive)
 :
@@ -1061,7 +1061,7 @@ LDA remain,Y
 BNE rcvblkreq
 DEY
 BPL loop
-JMP done2
+JMP doneclose
 :
 \ build block request
 :
