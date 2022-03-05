@@ -3,7 +3,7 @@ NEW
 AUTO
 REM > EcoXfrAsm
 REM Robert Franklin <rcf@mince.net>
-VERSION$="1.0 (2022-03-03)"
+VERSION$="1.01 (2022-03-05)"
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
