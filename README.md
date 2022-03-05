@@ -7,10 +7,12 @@ Micro, without needing a dedicated fileserver.
 It uses full 32-bit addresses for file sizes and offsets so can
 transfer files >64KiB.
 
-The speed is fairly good and seems to be slightly faster than copying a
-file up to my Model B with a
+The speed is fairly good and seems to be about the same as a Level 3
+File Server: copying a file from my Master running ANFS 4.25 to my
+Model B running either ANFS 4.18 or L3FS 1.25, both running
 [PiTubeDirect](https://github.com/hoglet67/PiTubeDirect) JIT 6502 (CPU
-#24) running L3FS 1.25.
+#24), it took about 36s to transfer 200KiB on a quiet Econet (to/from a
+[Pi1MHz](https://github.com/dp111/Pi1MHz) ADFS hard disc at each end).
 
 Usage
 -----
