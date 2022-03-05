@@ -160,6 +160,9 @@ STA dir
 LDA dir
 CMP #DIR_RCV
 BEQ dorcv
+LDA peer
+ORA peer+1
+BEQ missingstn
 JSR send
 .done
 RTS
@@ -178,6 +181,12 @@ EQUB 0
 BRK
 EQUB 208 \ =Bad station number
 EQUS "Bad station id"
+EQUB 0
+:
+.missingstn
+BRK
+EQUB 208 \ =Bad station number
+EQUS "Missing station id"
 EQUB 0
 :
 .parsedec
