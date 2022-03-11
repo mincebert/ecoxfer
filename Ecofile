@@ -20,12 +20,10 @@ codebuf%=3000
 DIM code% codebuf%
 scratch=&70
 scratchsize=5
-polltimeout=500
-txtimeout%=500
-rxtimeout%=500
 :
-polldelay%=10
-polltimeout%=500
+txinterval%=50
+txtries%=10
+rxtimeout%=500
 maxxfr=256:REM in single packet
 buflen=maxxfr+13:REM +13 for OSGBPB param block
 srv_port=77
@@ -80,7 +78,7 @@ bytes%=FNrx(station%,cli_port,buffer,9)
 IF bytes%<>9 THEN PRINT "Illegal next block":STOP
 IF ?buffer<>OP_BLKREQ THEN PRINT "Unexpected operation ";~?buffer
 UNTIL ?buffer=OP_BLKREQ
-VDU 13
+PRINT:VDU 13
 PRINT ;~buffer!1;
 IF buffer!1<>currpos% THEN PRINT "Error - we're expecting &";~currpos%:STOP
 :
@@ -101,7 +99,7 @@ IF result%<>0 THEN PRINT FNneterror(result%):STOP
 currpos%=currpos%+filebytes%
 UNTIL currpos%>=len%
 :
-VDU 13
+PRINT:VDU 13
 PRINT ;~currpos%
 :
 A%=0
@@ -148,7 +146,7 @@ IF fh%=0 THEN PRINT "Error opening file":STOP
 :
 currpos%=0
 REPEAT
-VDU 13
+PRINT:VDU 13
 PRINT ;~currpos%;
 ?buffer=OP_BLKREQ
 buffer!1=currpos%
@@ -171,7 +169,7 @@ IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error writing file":STOP
 :
 currpos%=currpos%+bytes%-5
 UNTIL currpos%>=len%
-VDU 13
+PRINT:VDU 13
 PRINT ;~currpos%
 :
 A%=0
@@ -182,10 +180,11 @@ ENDPROC
 :
 DEFFNtx_bas(station%,port%,buffer,len%)
 REM transmit packet
-LOCAL A%,X%,Y%,delay%,result%,nonfatal%
+LOCAL A%,X%,Y%,tries%,result%,nonfatal%
 :
-timeout%=TIME+polltimeout%
-REM loop until timeout or fatal
+tries%=0
+REM loop until success or
+REM retries exhausted
 REPEAT
 :
 REM set up control block
@@ -200,17 +199,21 @@ Y%=cblock DIV 256
 REM loop until started
 REPEAT
 ?cblock=&80
+PRINT "T";
 CALL OSWORD
 UNTIL ?cblock<>0
 :
 REM poll for completion
 REPEAT
+PRINT ".";
 A%=&32:REM poll transmit
 result%=(USR(OSBYTE) AND &FF00) DIV &100
 UNTIL (result% AND &80)=0
 :
+success%=(result%=0)
 nonfatal%=(result%=&41 OR result%=&42)
-UNTIL (NOT nonfatal%) OR TIME>=timeout%
+IF (NOT success%) AND nonfatal% AND (tries%<=txtries%) THEN PRINT "W";:tries%=tries%+1:PROCdelay(txinterval%)
+UNTIL success% OR (NOT nonfatal%) OR (tries%>=txtries%)
 =result%
 :
 DEFFNrx_bas(station%,port%,buffer,maxlen%)
@@ -234,8 +237,9 @@ CALL OSWORD
 REM poll for reception
 A%=&33:REM poll receive
 X%=?cblock
-timeout%=TIME+polltimeout%
+timeout%=TIME+rxtimeout%
 REPEAT
+PRINT ".";
 result%=(USR(OSBYTE) AND &8000)
 UNTIL result%<>0 OR TIME>=timeout%
 IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock:CALL OSBYTE:=-1
