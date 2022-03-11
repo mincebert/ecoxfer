@@ -1,0 +1,314 @@
+*BASIC
+NEW
+AUTO
+REM>Ecofile
+:
+OSWORD=&FFF1
+OSBYTE=&FFF4
+OSFILE=&FFDD
+OSGBPB=&FFD1
+OSFIND=&FFCE
+OSASCI=&FFE3
+OSNEWL=&FFE7
+OSWRCH=&FFEE
+:
+OP_FILEINFO=&01
+OP_BLKREQ=&81
+OP_BLKSND=&02
+:
+codebuf%=3000
+DIM code% codebuf%
+scratch=&70
+scratchsize=5
+polltimeout=500
+txtimeout%=500
+rxtimeout%=500
+:
+polldelay%=10
+polltimeout%=500
+maxxfr=256:REM in single packet
+buflen=maxxfr+13:REM +13 for OSGBPB param block
+srv_port=77
+cli_port=78
+DIM cblock 13,buffer buflen
+:
+REPEAT
+INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
+UNTIL INSTR("TRP",dir$)<>0
+:
+IF dir$="P" THEN PROCpkttest
+:
+REPEAT
+INPUT "Remote station (0=any)? " station%
+UNTIL station%>=0 AND station%<=254
+:
+IF dir$="T" THEN PROCtransmit
+IF dir$="R" THEN PROCreceive
+PRINT "Done"
+END
+:
+DEFPROCtransmit
+LOCAL filenamelen%,result%
+INPUT "Filename? " filename$
+IF 18+LEN(filename$)+1>=buflen THEN PRINT "Filename too long":STOP
+:
+$(buffer+18)=filename$
+!buffer=buffer+18
+A%=5
+X%=buffer MOD 256
+Y%=buffer DIV 256
+result%=USR(OSFILE) AND &FF
+IF result%<>1 THEN PRINT "File error":STOP
+len%=buffer!10
+PRINT filename$;" ";~buffer!2;" ";~buffer!6;" ";~len%
+:
+?buffer=OP_FILEINFO
+buffer?1=cli_port
+result%=FNtx(station%,srv_port,buffer,18+LEN(filename$)+1)
+IF result%<>0 THEN PRINT FNneterror(result%):STOP
+:
+A%=64:REM open for input
+X%=(buffer+18) MOD 256
+Y%=(buffer+18) DIV 256
+fh%=USR(OSFIND) AND &FF
+IF fh%=0 THEN PRINT "Error opening file":STOP
+:
+currpos%=0
+REPEAT
+REPEAT
+bytes%=FNrx(station%,cli_port,buffer,9)
+IF bytes%<>9 THEN PRINT "Illegal next block":STOP
+IF ?buffer<>OP_BLKREQ THEN PRINT "Unexpected operation ";~?buffer
+UNTIL ?buffer=OP_BLKREQ
+VDU 13
+PRINT ;~buffer!1;
+IF buffer!1<>currpos% THEN PRINT "Error - we're expecting &";~currpos%:STOP
+:
+filebytes%=FNmin(maxxfr,len%-currpos%)
+?buffer=fh%
+buffer!1=buffer+13
+filebytes%=FNmin(maxxfr,len%-currpos%)
+buffer!5=filebytes%
+A%=4:REM read at curr pos
+X%=buffer MOD 256
+Y%=buffer DIV 256
+IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error reading file":STOP
+:
+buffer?8=OP_BLKSND
+buffer!9=currpos%
+result%=FNtx(station%,srv_port,buffer+8,filebytes%+5)
+IF result%<>0 THEN PRINT FNneterror(result%):STOP
+currpos%=currpos%+filebytes%
+UNTIL currpos%>=len%
+:
+VDU 13
+PRINT ;~currpos%
+:
+A%=0
+Y%=fh%
+CALL OSFIND
+ENDPROC
+:
+DEFPROCreceive
+LOCAL bytes%
+REPEAT
+PRINT "Waiting for TX start..."
+bytes%=FNrx(station%,srv_port,buffer,buflen)
+IF bytes%<0 THEN PRINT "Nothing received"
+UNTIL bytes%>=0
+IF bytes%<20 THEN PRINT "Illegal info block (too small)":STOP
+IF ?buffer<>OP_FILEINFO THEN PRINT "Unexpected operation ";~?buffer:STOP
+:
+station%=cblock!3 AND &FFFF
+port%=buffer?1
+name$=$(buffer+18)
+load%=buffer!2
+exec%=buffer!6
+len%=buffer!10
+PRINT FNstation(station%);":";port%;" ";name$;" ";~load%;" ";~exec%;" ";~len%
+:
+REM *SAVE 0 length file with
+REM required load/exec
+:
+REM pointer to filename
+buffer?0=(buffer+18) MOD 256
+buffer?1=(buffer+18) DIV 256
+buffer!10=0:REM block start
+buffer!14=0:REM block end
+A%=0:REM *SAVE
+X%=buffer MOD 256
+Y%=buffer DIV 256
+CALL OSFILE
+:
+A%=&C0:REM =append
+X%=buffer?0
+Y%=buffer?1
+fh%=USR(OSFIND) AND &FF
+IF fh%=0 THEN PRINT "Error opening file":STOP
+:
+currpos%=0
+REPEAT
+VDU 13
+PRINT ;~currpos%;
+?buffer=OP_BLKREQ
+buffer!1=currpos%
+buffer!5=maxxfr
+result%=FNtx(station%,port%,buffer,9)
+IF result%<>0 THEN PRINT FNneterror(result%):STOP
+:
+bytes%=FNrx(station%,srv_port,buffer+8,maxxfr+5)
+IF buffer?8<>OP_BLKSND THEN PRINT "Invalid block type received":STOP
+IF buffer!9<>currpos% THEN PRINT "Incorrect position":STOP
+IF bytes%-5>len%-currpos% THEN PRINT "Oversize block":STOP
+:
+?buffer=fh%
+buffer!1=buffer+13
+buffer!5=bytes%-5
+A%=2:REM append
+X%=buffer MOD 256
+Y%=buffer DIV 256
+IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error writing file":STOP
+:
+currpos%=currpos%+bytes%-5
+UNTIL currpos%>=len%
+VDU 13
+PRINT ;~currpos%
+:
+A%=0
+Y%=fh%
+CALL OSFIND
+:
+ENDPROC
+:
+DEFFNtx_bas(station%,port%,buffer,len%)
+REM transmit packet
+LOCAL A%,X%,Y%,delay%,result%,nonfatal%
+:
+timeout%=TIME+polltimeout%
+REM loop until timeout or fatal
+REPEAT
+:
+REM set up control block
+cblock?1=port%
+cblock!2=station%
+cblock!4=buffer
+cblock!8=buffer+len%
+REM start transmission
+A%=&10:REM transmit
+X%=cblock
+Y%=cblock DIV 256
+REM loop until started
+REPEAT
+?cblock=&80
+CALL OSWORD
+UNTIL ?cblock<>0
+:
+REM poll for completion
+REPEAT
+A%=&32:REM poll transmit
+result%=(USR(OSBYTE) AND &FF00) DIV &100
+UNTIL (result% AND &80)=0
+:
+nonfatal%=(result%=&41 OR result%=&42)
+UNTIL (NOT nonfatal%) OR TIME>=timeout%
+=result%
+:
+DEFFNrx_bas(station%,port%,buffer,maxlen%)
+REM receive packet return #bytes
+:
+LOCAL A%,X%,Y%
+:
+REM set up control block
+?cblock=0:REM for cblock num
+cblock?1=&7F
+cblock?2=port%
+cblock!3=station%
+cblock!5=buffer
+cblock!9=buffer+maxlen%
+REM listen
+A%=&11:REM receive
+X%=cblock
+Y%=cblock DIV 256
+CALL OSWORD
+:
+REM poll for reception
+A%=&33:REM poll receive
+X%=?cblock
+timeout%=TIME+polltimeout%
+REPEAT
+result%=(USR(OSBYTE) AND &8000)
+UNTIL result%<>0 OR TIME>=timeout%
+IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock:CALL OSBYTE:=-1
+:
+A%=&11:REM receive
+X%=cblock
+Y%=cblock DIV 256
+REM ?cblock populated above
+CALL OSWORD
+=cblock!9-cblock!5
+:
+DEFPROCdelay(n%)
+REM delay n% cs
+LOCAL limit%
+limit%=TIME+n%
+REPEAT UNTIL TIME>=limit%
+ENDPROC
+:
+DEFFNmin(a,b)
+IF a<=b THEN =a ELSE =b
+:
+DEFFNstation(station%)
+LOCAL s$
+s$=""
+IF (station% DIV 256)<>0 THEN s$=STR$(station% DIV 256)+"."
+=s$+STR$(station% MOD 256)
+:
+DEFFNneterror(err%)
+IF err%=&40 THEN ="Line jammed"
+IF err%=&41 THEN ="Net error"
+IF err%=&42 THEN ="Not listening"
+IF err%=&43 THEN ="No clock"
+IF err%=&44 THEN ="Bad control block"
+="ERR#"+STR$~err%
+:
+DEFPROCpkttest
+LOCAL station%,key$
+PRINT "PACKET TEST"
+REPEAT
+INPUT "Remote station? "station%
+UNTIL station%>1 AND station%<255
+:
+REPEAT
+PRINT "T(ransmit) or R(eceive): ";
+REPEAT
+key$=GET$
+valid%=INSTR("TR",key$)<>0
+IF NOT valid% THEN VDU 7
+UNTIL valid%
+PRINT key$
+IF key$="T" THEN PROCtxtest(station%)
+IF key$="R" THEN PROCrxtest(station%)
+UNTIL FALSE
+ENDPROC
+:
+DEFFNtx(station%,port%,buffer,len%)
+REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~len%
+=FNtx_bas(station%,port%,buffer,len%)
+:
+DEFFNrx(station%,port%,buffer,maxlen%)
+REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~maxlen%
+=FNrx_bas(station%,port%,buffer,maxlen%)
+:
+DEFPROCtxtest(station%)
+LOCAL result%
+$buffer="to:"+STR$(station%)
+result%=FNtx(station%,port%+1,buffer,LEN($buffer)+1)
+PRINT "Result=&";~result%
+ENDPROC
+:
+DEFPROCrxtest(station%)
+LOCAL bytes%
+bytes%=FNrx(station%,port%+1,buffer,buflen)
+PRINT "Bytes=";bytes%
+IF bytes%<>-1 THEN PRINT "Received:<";$buffer;">"
+ENDPROC
