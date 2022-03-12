@@ -1,7 +1,7 @@
 *BASIC
 NEW
 AUTO
-REM>Ecofile
+REM>EcoXfrBas
 :
 OSWORD=&FFF1
 OSBYTE=&FFF4
@@ -20,18 +20,18 @@ txinterval%=50
 txtries%=10
 rxtimeout%=500
 maxxfr%=256:REM in single packet
-sndbuflen=maxxfr%+13:REM +13 for OSGBPB param block
-rcvbuflen=9:REM always 9 bytes for BLKREQ
+sndbuflen%=maxxfr%+13:REM +13 for OSGBPB param block
+rcvbuflen%=9:REM always 9 bytes for BLKREQ
 srv_port%=77
 cli_port%=78
 :
-REM cblock for Econet cblock
-REM sndbuffer% for snd > rcv
-REM rcvbuffer% for rcv > snd
+REM Econet cblock for tx/rx
+REM sndbuffer% for snd->rcv
+REM rcvbuffer% for rcv->snd
 REM used on both (e.g. rcv
 REM receives from snd into
 REM sndbuffer%)
-DIM cblock 13,sndbuffer% sndbuflen,rcvbuffer% rcvbuflen
+DIM txcblock% 12,rxcblock% 12,sndbuffer% sndbuflen%,rcvbuffer% rcvbuflen%
 :
 REPEAT
 INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
@@ -51,7 +51,7 @@ END
 DEFPROCtransmit
 LOCAL filenamelen%,result%
 INPUT "Filename? " filename$
-IF 18+LEN(filename$)+1>=sndbuflen THEN PRINT "Filename too long":STOP
+IF 18+LEN(filename$)+1>=sndbuflen% THEN PRINT "Filename too long":STOP
 :
 $(sndbuffer%+18)=filename$
 !sndbuffer%=sndbuffer%+18
@@ -114,13 +114,13 @@ DEFPROCreceive
 LOCAL bytes%
 REPEAT
 PRINT "Waiting for TX start..."
-bytes%=FNrx(station%,srv_port%,sndbuffer%,sndbuflen)
+bytes%=FNrx(station%,srv_port%,sndbuffer%,sndbuflen%)
 IF bytes%<0 THEN PRINT "Nothing received"
 UNTIL bytes%>=0
 IF bytes%<20 THEN PRINT "Illegal info block (too small)":STOP
 IF ?sndbuffer%<>OP_FILEINFO THEN PRINT "Unexpected operation &";~?sndbuffer%;" - expected FILEINFO":STOP
 :
-station%=cblock!3 AND &FFFF
+station%=rxcblock%!3 AND &FFFF
 port%=sndbuffer%?1
 name$=$(sndbuffer%+18)
 len%=sndbuffer%!10
@@ -130,8 +130,8 @@ REM *SAVE 0 length file with
 REM required load/exec
 :
 REM pointer to filename
-buffer?0=(sndbuffer%+18) MOD 256
-buffer?1=(sndbuffer%+18) DIV 256
+sndbuffer%?0=(sndbuffer%+18) MOD 256
+sndbuffer%?1=(sndbuffer%+18) DIV 256
 sndbuffer%!10=0:REM block start
 sndbuffer%!14=0:REM block end
 A%=0:REM *SAVE
@@ -189,20 +189,20 @@ REM retries exhausted
 REPEAT
 :
 REM set up control block
-cblock?1=port%
-cblock!2=station%
-cblock!4=buffer%
-cblock!8=buffer%+len%
+txcblock%?1=port%
+txcblock%!2=station%
+txcblock%!4=buffer%
+txcblock%!8=buffer%+len%
 REM start transmission
 A%=&10:REM transmit
-X%=cblock
-Y%=cblock DIV 256
+X%=txcblock%
+Y%=txcblock% DIV 256
 REM loop until started
 REPEAT
-?cblock=&80
+?txcblock%=&80
 PRINT "T";
 CALL OSWORD
-UNTIL ?cblock<>0
+UNTIL ?txcblock%<>0
 :
 REM poll for completion
 REPEAT
@@ -223,34 +223,34 @@ REM receive packet return #bytes
 LOCAL A%,X%,Y%,timeout%,result%
 :
 REM set up control block
-?cblock=0:REM for cblock num
-cblock?1=&7F
-cblock?2=port%
-cblock!3=station%
-cblock!5=buffer%
-cblock!9=buffer%+maxlen%
+?rxcblock%=0:REM for cblock num
+rxcblock%?1=&7F
+rxcblock%?2=port%
+rxcblock%!3=station%
+rxcblock%!5=buffer%
+rxcblock%!9=buffer%+maxlen%
 REM listen
 A%=&11:REM receive
-X%=cblock
-Y%=cblock DIV 256
+X%=rxcblock%
+Y%=rxcblock% DIV 256
 CALL OSWORD
 :
 REM poll for reception
 A%=&33:REM poll receive
-X%=?cblock
+X%=?rxcblock%
 timeout%=TIME+rxtimeout%
 REPEAT
 PRINT ".";
 result%=(USR(OSBYTE) AND &8000)
 UNTIL result%<>0 OR TIME>=timeout%
-IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?cblock:CALL OSBYTE:=-1
+IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?rxcblock%:CALL OSBYTE:=-1
 :
 A%=&11:REM receive
-X%=cblock
-Y%=cblock DIV 256
-REM ?cblock populated above
+X%=rxcblock%
+Y%=rxcblock% DIV 256
+REM ?rxcblock% populated above
 CALL OSWORD
-=cblock!9-cblock!5
+=rxcblock%!9-rxcblock%!5
 :
 DEFPROCdelay(n%)
 REM delay n% cs
@@ -296,24 +296,24 @@ IF key$="R" THEN PROCrxtest(station%)
 UNTIL FALSE
 ENDPROC
 :
-DEFFNtx(station%,port%,buffer,len%)
-REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~len%
-=FNtx_bas(station%,port%,buffer,len%)
+DEFFNtx(station%,port%,buffer%,len%)
+REM PRINT "TX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~len%
+=FNtx_bas(station%,port%,buffer%,len%)
 :
-DEFFNrx(station%,port%,buffer,maxlen%)
-REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer;"+";~maxlen%
-=FNrx_bas(station%,port%,buffer,maxlen%)
+DEFFNrx(station%,port%,buffer%,maxlen%)
+REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~maxlen%
+=FNrx_bas(station%,port%,buffer%,maxlen%)
 :
 DEFPROCtxtest(station%)
 LOCAL result%
-$buffer="to:"+STR$(station%)
-result%=FNtx(station%,port%+1,buffer,LEN($buffer)+1)
+$(txbuffer%)="to:"+STR$(station%)
+result%=FNtx(station%,port%+1,txbuffer%,LEN($(txbuffer%))+1)
 PRINT "Result=&";~result%
 ENDPROC
 :
 DEFPROCrxtest(station%)
 LOCAL bytes%
-bytes%=FNrx(station%,port%+1,buffer,rcvbuflen)
+bytes%=FNrx(station%,port%+1,rxbuffer%,rcvbuflen%)
 PRINT "Bytes=";bytes%
-IF bytes%<>-1 THEN PRINT "Received:<";$buffer;">"
+IF bytes%<>-1 THEN PRINT "Received:<";$(rxbuffer%);">"
 ENDPROC
