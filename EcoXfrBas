@@ -163,7 +163,7 @@ IF bytes%-5>len%-currpos% THEN PRINT "Oversize block":STOP
 ?sndbuffer%=fh%
 sndbuffer%!1=sndbuffer%+13
 sndbuffer%!5=bytes%-5
-A%=2:REM append
+A%=2:REM =append
 X%=sndbuffer% MOD 256
 Y%=sndbuffer% DIV 256
 IF (USR(OSGBPB) AND &1000000)<>0 THEN PRINT "Error writing file":STOP
@@ -225,7 +225,8 @@ REM PRINT "RX ";FNstation(station%);":";port%;" @ &";~buffer%;"+";~maxlen%
 PROCrx_start(station%,port%,buffer%,maxlen%)
 REPEAT
 bytes%=FNrx_poll
-UNTIL bytes%>=-1:REM -2 waiting
+UNTIL bytes%>=-1:REM -2=waiting
+IF bytes%=-1 THEN PROCrx_delete
 =bytes%
 :
 DEFPROCrx_start(station%,port%,buffer%,maxlen%)
@@ -252,7 +253,7 @@ A%=&33:REM poll receive
 X%=?rxcblock%
 result%=(USR(OSBYTE) AND &8000)
 IF result%=0 AND TIME<rxexpire% THEN =-2
-IF result%=0 THEN PRINT "Timed out waiting":A%=&34:X%=?rxcblock%:CALL OSBYTE:=-1
+IF result%=0 THEN =-1
 :
 A%=&11:REM receive
 X%=rxcblock%
@@ -260,6 +261,12 @@ Y%=rxcblock% DIV 256
 REM ?rxcblock% populated above
 CALL OSWORD
 =rxcblock%!9-rxcblock%!5
+:
+DEFPROCrx_delete
+A%=&34:REM =delete
+X%=?rxcblock%
+CALL OSBYTE
+ENDPROC
 :
 DEFPROCdelay(n%)
 REM delay n% cs
