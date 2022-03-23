@@ -8,17 +8,15 @@ OSBYTE=&FFF4
 OSFILE=&FFDD
 OSGBPB=&FFD1
 OSFIND=&FFCE
-OSASCI=&FFE3
-OSNEWL=&FFE7
-OSWRCH=&FFEE
 :
+REM packet operation types
 OP_FILEINFO=&01
 OP_BLKREQ=&81
 OP_BLKSND=&02
 :
-txinterval%=50
+txinterval%=50:REM in cs
 txmaxtries%=10
-rxtimeout%=500
+rxtimeout%=500:REM in cs
 maxxfr%=256:REM in single packet
 sndbuflen%=maxxfr%+13:REM +13 for OSGBPB param block
 rcvbuflen%=9:REM always 9 bytes for BLKREQ
@@ -26,12 +24,14 @@ srv_port%=77
 cli_port%=78
 :
 REM Econet cblock for tx/rx
+DIM txcblock% 11,rxcblock% 12
+:
 REM sndbuffer% for snd->rcv
 REM rcvbuffer% for rcv->snd
 REM used on both (e.g. rcv
 REM receives from snd into
 REM sndbuffer%)
-DIM txcblock% 12,rxcblock% 12,sndbuffer% sndbuflen%,rcvbuffer% rcvbuflen%
+DIM sndbuffer% sndbuflen%-1,rcvbuffer% rcvbuflen%-1
 :
 REPEAT
 INPUT "T(ransmit), R(eceive) or P(kttest)? " dir$
